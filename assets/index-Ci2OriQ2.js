@@ -1,1 +1,1 @@
-BASE64_PLACEHOLDER
+var sme=Object.defineProperty
