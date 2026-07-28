@@ -16,7 +16,6 @@ import { PERM, permLevelName } from '../utils/permissions.js';
 import { writeLog, LOG_ACTIONS, actionLabels } from '../utils/operationLog.js';
 import dayjs from 'dayjs';
 
-const { TabPane } = Tabs;
 const { Option } = Select;
 const { Title, Text } = Typography;
 
@@ -24,26 +23,38 @@ export default function Settings() {
   const { currentAccount, can } = useAuth();
   const [activeTab, setActiveTab] = useState('account');
 
+  const tabItems = [
+    {
+      key: 'account',
+      label: <span><UserOutlined />账户管理</span>,
+      children: <AccountManager />
+    },
+    {
+      key: 'role',
+      label: <span><TeamOutlined />角色权限</span>,
+      children: <RoleManager />
+    },
+    {
+      key: 'store',
+      label: <span><ShopOutlined />店铺管理</span>,
+      children: <StoreManager />
+    },
+    {
+      key: 'data',
+      label: <span><DeleteOutlined />数据管理</span>,
+      children: <DataManager />
+    },
+    {
+      key: 'logs',
+      label: <span><FileTextOutlined />操作日志</span>,
+      children: <LogViewer />
+    }
+  ];
+
   return (
     <div>
       <Title level={4} style={{ marginTop: 0 }}>系统设置</Title>
-      <Tabs activeKey={activeTab} onChange={setActiveTab}>
-        <TabPane tab={<span><UserOutlined />账户管理</span>} key="account">
-          <AccountManager />
-        </TabPane>
-        <TabPane tab={<span><TeamOutlined />角色权限</span>} key="role">
-          <RoleManager />
-        </TabPane>
-        <TabPane tab={<span><ShopOutlined />店铺管理</span>} key="store">
-          <StoreManager />
-        </TabPane>
-        <TabPane tab={<span><DeleteOutlined />数据管理</span>} key="data">
-          <DataManager />
-        </TabPane>
-        <TabPane tab={<span><FileTextOutlined />操作日志</span>} key="logs">
-          <LogViewer />
-        </TabPane>
-      </Tabs>
+      <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
     </div>
   );
 }
@@ -455,22 +466,36 @@ function DataManager() {
 
   React.useEffect(() => {
     (async () => {
-      setTxCount(await db.transactions.count());
-      setPrCount(await db.profitReports.count());
-      setLogCount(await db.operationLogs.count());
-      const months = await db.transactions.orderBy('month').uniqueKeys();
-      setMonthOptions(months.sort().reverse());
-      const stores = await db.stores.toArray();
-      setStoreOptions(stores);
+      try {
+        setTxCount(await db.transactions.count());
+        setPrCount(await db.profitReports.count());
+        setLogCount(await db.operationLogs.count());
+        // 获取所有交易记录，提取唯一的月份
+        const allTx = await db.transactions.toArray();
+        const monthSet = new Set(allTx.map(t => t.month).filter(Boolean));
+        const months = Array.from(monthSet).sort().reverse();
+        setMonthOptions(months);
+        const stores = await db.stores.toArray();
+        setStoreOptions(stores);
+      } catch (err) {
+        console.error('DataManager 初始化失败:', err);
+      }
     })();
   }, []);
 
   const refreshCounts = async () => {
-    setTxCount(await db.transactions.count());
-    setPrCount(await db.profitReports.count());
-    setLogCount(await db.operationLogs.count());
-    const months = await db.transactions.orderBy('month').uniqueKeys();
-    setMonthOptions(months.sort().reverse());
+    try {
+      setTxCount(await db.transactions.count());
+      setPrCount(await db.profitReports.count());
+      setLogCount(await db.operationLogs.count());
+      // 获取所有交易记录，提取唯一的月份
+      const allTx = await db.transactions.toArray();
+      const monthSet = new Set(allTx.map(t => t.month).filter(Boolean));
+      const months = Array.from(monthSet).sort().reverse();
+      setMonthOptions(months);
+    } catch (err) {
+      console.error('refreshCounts 失败:', err);
+    }
   };
 
   const [selectedMonth, setSelectedMonth] = useState(null);

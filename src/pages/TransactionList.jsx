@@ -100,13 +100,14 @@ export default function TransactionList() {
       .where('[page+accountId]')
       .equals(['transactions', currentAccount?.id || 0])
       .reverse()
-      .sortBy('createdAt'),
+      .sortBy('createdAt')
+      .toArray(),
     [currentAccount?.id],
     []
   );
 
   useEffect(() => {
-    if (mySavedViews) setSavedViews(mySavedViews);
+    if (Array.isArray(mySavedViews)) setSavedViews(mySavedViews);
   }, [mySavedViews]);
 
   const monthOptions = useMemo(() => {
@@ -357,7 +358,7 @@ export default function TransactionList() {
 
   const viewMenuItems = useMemo(() => {
     const items = [];
-    if (savedViews.length === 0) {
+    if (!Array.isArray(savedViews) || savedViews.length === 0) {
       items.push({ key: 'empty', label: <Text type="secondary">暂无保存的视图</Text>, disabled: true });
     } else {
       savedViews.forEach((v) => {

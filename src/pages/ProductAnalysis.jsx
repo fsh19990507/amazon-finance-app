@@ -87,13 +87,14 @@ export default function ProductAnalysis() {
       .where('[page+accountId]')
       .equals(['product', currentAccount?.id || 0])
       .reverse()
-      .sortBy('createdAt'),
+      .sortBy('createdAt')
+      .toArray(),
     [currentAccount?.id],
     []
   );
 
   useEffect(() => {
-    if (mySavedViews) setSavedViews(mySavedViews);
+    if (Array.isArray(mySavedViews)) setSavedViews(mySavedViews);
   }, [mySavedViews]);
 
   const monthOptions = useMemo(() => {
@@ -394,7 +395,7 @@ export default function ProductAnalysis() {
 
   const viewMenuItems = useMemo(() => {
     const items = [];
-    if (savedViews.length === 0) {
+    if (!Array.isArray(savedViews) || savedViews.length === 0) {
       items.push({ key: 'empty', label: <Text type="secondary">暂无保存的视图</Text>, disabled: true });
     } else {
       savedViews.forEach((v) => {

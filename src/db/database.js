@@ -322,13 +322,13 @@ export async function ensureInitialized() {
   try {
     const adminCount = await db.accounts.where('username').equals('admin').count();
     if (adminCount === 0) {
-      const adminHash = hashPassword('admin123');
+      const adminHash = hashPassword('admin');
       await db.accounts.add({
         username: 'admin',
         passwordHash: adminHash,
         nickname: '管理员',
         level: 4,
-        mustChangePassword: true
+        mustChangePassword: false
       });
     }
   } catch (e) {

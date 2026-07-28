@@ -24,6 +24,7 @@ import TransactionList from './pages/TransactionList.jsx';
 import ExpenseAnalysis from './pages/ExpenseAnalysis.jsx';
 import ProductAnalysis from './pages/ProductAnalysis.jsx';
 import Settings from './pages/Settings.jsx';
+import ErrorBoundary from './components/ErrorBoundary.jsx';
 
 const { Header, Sider, Content } = Layout;
 const { Option } = Select;
@@ -300,12 +301,12 @@ function AppLayout() {
           }}
         >
           <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/import" element={<DataImport />} />
-            <Route path="/transactions" element={<TransactionList />} />
-            <Route path="/expense" element={<ExpenseAnalysis />} />
-            <Route path="/product" element={<ProductAnalysis />} />
-            <Route path="/settings" element={<Settings />} />
+            <Route path="/" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
+            <Route path="/import" element={<ErrorBoundary><DataImport /></ErrorBoundary>} />
+            <Route path="/transactions" element={<ErrorBoundary><TransactionList /></ErrorBoundary>} />
+            <Route path="/expense" element={<ErrorBoundary><ExpenseAnalysis /></ErrorBoundary>} />
+            <Route path="/product" element={<ErrorBoundary><ProductAnalysis /></ErrorBoundary>} />
+            <Route path="/settings" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Content>

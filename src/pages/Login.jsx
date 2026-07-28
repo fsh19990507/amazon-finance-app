@@ -15,15 +15,22 @@ export default function Login() {
   // 检查数据库是否可用（不调用 ensureInitialized，避免重复初始化）
   useEffect(() => {
     let cancelled = false;
+    const TIMEOUT_MS = 8000; // 8秒超时
+
     (async () => {
       try {
-        // 简单检查数据库连接
-        const count = await db.accounts.count();
+        // 用 Promise.race 加超时
+        const result = await Promise.race([
+          db.accounts.count(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS)
+          ),
+        ]);
         if (!cancelled) {
-          setInitState(count > 0 ? 'ready' : 'error');
+          setInitState(result > 0 ? 'ready' : 'error');
         }
       } catch (e) {
-        console.error('数据库连接失败:', e.message);
+        console.warn('数据库连接检查失败（超时或网络错误）:', e.message);
         if (!cancelled) setInitState('error');
       }
     })();
@@ -33,10 +40,19 @@ export default function Login() {
   // 重试连接
   const handleRetry = () => {
     setInitState('checking');
-    setTimeout(() => {
-      db.accounts.count()
-        .then((count) => setInitState(count > 0 ? 'ready' : 'error'))
-        .catch(() => setInitState('error'));
+    const TIMEOUT_MS = 8000;
+    setTimeout(async () => {
+      try {
+        const count = await Promise.race([
+          db.accounts.count(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS)
+          ),
+        ]);
+        setInitState(count > 0 ? 'ready' : 'error');
+      } catch {
+        setInitState('error');
+      }
     }, 500);
   };
 
@@ -150,7 +166,7 @@ export default function Login() {
           <Title level={3} style={{ marginBottom: 4, color: '#1e3a5f' }}>亚马逊财务系统</Title>
           <Text type="secondary">本地化部署 · 数据安全留存</Text>
         </div>
-        <Form layout="vertical" onFinish={handleLogin} initialValues={{ username: 'admin', password: 'admin123' }}>
+        <Form layout="vertical" onFinish={handleLogin} initialValues={{ username: 'admin', password: 'admin' }}>
           <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
             <Input prefix={<UserOutlined />} placeholder="请输入用户名" />
           </Form.Item>
@@ -163,7 +179,7 @@ export default function Login() {
             </Button>
           </Form.Item>
         </Form>
-        <Alert type="info" showIcon message="默认账户" description="用户名：admin / 密码：admin123" size="small" />
+        <Alert type="info" showIcon message="默认账户" description="用户名：admin / 密码：admin" size="small" />
       </Card>
     </div>
   );
