@@ -122,7 +122,15 @@ class SupabaseQuery {
   }
 
   async count() {
-    const { count, error } = await this._buildQuery().select('*', { count: 'exact', head: true });
+    let query = supabase.from(this.tableName).select('*', { count: 'exact', head: true });
+    for (const f of this._filters) {
+      switch (f.op) {
+        case 'eq': query = query.eq(f.field, f.value); break;
+        case 'neq': query = query.neq(f.field, f.value); break;
+        default: query = query.filter(f.field, f.op, f.value);
+      }
+    }
+    const { count, error } = await query;
     if (error) throw error;
     return count || 0;
   }
@@ -148,9 +156,105 @@ class SupabaseQuery {
 
 // ============== Supabase 表包装器 ==============
 
+// 缓存：每个表已知的列集合（启动时探测）
+const TABLE_COLUMNS_CACHE = new Map();
+
+// 从错误消息中提取缺失的列名
+function extractMissingColumn(error) {
+  if (!error?.message) return null;
+  const m = String(error.message).match(/Could not find the '([^']+)' column/);
+  return m ? m[1] : null;
+}
+
+/**
+ * 探测表的列结构
+ * 通过尝试 select 一个不存在的字段来获取所有列的"已知缺失集"
+ * 同时用一个一次性查询返回已有的字段
+ */
+async function detectTableColumns(tableName) {
+  // 使用 OpenAPI 不需要 service_role，但需要"探测"列
+  // 简化方案：用 1 行查询拿回所有列名
+  const known = new Set();
+  const missing = new Set();
+  try {
+    const { data, error } = await supabase.from(tableName).select('*').limit(1);
+    if (data && data[0]) {
+      Object.keys(data[0]).forEach((k) => known.add(k));
+    }
+  } catch (e) {
+    // ignore
+  }
+  return { known, missing };
+}
+
 class SupabaseTable {
-  constructor(tableName) {
+  constructor(tableName, primaryKey = 'id') {
     this.tableName = tableName;
+    this.primaryKey = primaryKey;
+    this._knownColumns = null;
+  }
+
+  /**
+   * 探测并缓存表结构
+   * 已知字段保留在写入中，未知字段会被尝试写入
+   */
+  async _detectColumns() {
+    if (this._knownColumns !== null) return this._knownColumns;
+    const { known, missing } = await detectTableColumns(this.tableName);
+    this._knownColumns = { known, missing };
+    return this._knownColumns;
+  }
+
+  /**
+   * 过滤掉已确认缺失的列
+   */
+  _filterMissingCols(item) {
+    if (!this._knownColumns?.missing?.size) return item;
+    const filtered = { ...item };
+    for (const col of this._knownColumns.missing) {
+      delete filtered[col];
+    }
+    return filtered;
+  }
+
+  /**
+   * 写入容错：如果遇到列不存在错误，记录并自动剥离该列重试
+   */
+  async _safeInsert(rows, useUpsert = false) {
+    let attemptRows = rows.map((r) => ({ ...r }));
+
+    // 自动剥离已知缺失列
+    if (this._knownColumns?.missing?.size) {
+      attemptRows = attemptRows.map((r) => this._filterMissingCols(r));
+    }
+
+    for (let i = 0; i < 3 && attemptRows.length > 0; i++) {
+      const { data, error } = useUpsert
+        ? await supabase.from(this.tableName).upsert(attemptRows, { ignoreDuplicates: false }).select()
+        : await supabase.from(this.tableName).insert(attemptRows).select();
+
+      if (!error) {
+        return data;
+      }
+
+      // 尝试识别缺失列并剥离重试
+      const missingCol = extractMissingColumn(error);
+      if (missingCol) {
+        console.warn(`[${this.tableName}] 列 ${missingCol} 不存在，自动剥离重试`);
+        if (!this._knownColumns) this._knownColumns = { known: new Set(), missing: new Set() };
+        this._knownColumns.missing.add(missingCol);
+        attemptRows = attemptRows.map((r) => {
+          const copy = { ...r };
+          delete copy[missingCol];
+          return copy;
+        });
+        continue;
+      }
+
+      throw error;
+    }
+
+    throw new Error(`[${this.tableName}] 写入失败：多次重试后仍无法解决`);
   }
 
   where(field) {
@@ -162,7 +266,7 @@ class SupabaseTable {
   }
 
   reverse() {
-    return new SupabaseQuery(this.tableName).sortBy('id').reverse();
+    return new SupabaseQuery(this.tableName).sortBy(this.primaryKey).reverse();
   }
 
   limit(n) {
@@ -172,40 +276,45 @@ class SupabaseTable {
   async toArray() {
     const { data, error } = await supabase.from(this.tableName).select('*');
     if (error) throw error;
+    // 顺便缓存已知列
+    if (data?.[0]) {
+      this._knownColumns = this._knownColumns || { known: new Set(), missing: new Set() };
+      Object.keys(data[0]).forEach((k) => this._knownColumns.known.add(k));
+    }
     return (data || []).map(toCamel);
   }
 
   async get(id) {
-    const { data, error } = await supabase.from(this.tableName).select('*').eq('id', id).single();
+    const { data, error } = await supabase.from(this.tableName).select('*').eq(this.primaryKey, id).single();
     if (error) return null;
     return data ? toCamel(data) : null;
   }
 
   async add(item) {
-    const { id, ...rest } = toSnake(item);
-    // 使用 upsert 避免唯一键冲突（如 username）
-    const { data, error } = await supabase.from(this.tableName)
-      .upsert([rest], { onConflict: 'id', ignoreDuplicates: false })
-      .select();
-    if (error) {
-      // 如果 id 冲突，尝试不带 id 插入让数据库自动生成
-      const { data: d2, error: e2 } = await supabase.from(this.tableName)
-        .insert([rest])
-        .select();
-      if (e2) throw e2;
-      return d2?.[0]?.id;
-    }
-    return data?.[0]?.id;
+    const snakeItem = toSnake(item);
+    const { [this.primaryKey]: pkVal, ...rest } = snakeItem;
+    const data = await this._safeInsert([rest], true);
+    return data?.[0]?.[this.primaryKey];
   }
 
   async put(item) {
     const snakeItem = toSnake(item);
-    if (snakeItem.id) {
-      const { data: existing } = await supabase.from(this.tableName).select('id').eq('id', snakeItem.id).single();
+    const pkVal = snakeItem[this.primaryKey];
+    if (pkVal !== undefined && pkVal !== null) {
+      const { data: existing } = await supabase.from(this.tableName).select(this.primaryKey).eq(this.primaryKey, pkVal).maybeSingle();
       if (existing) {
-        const { error } = await supabase.from(this.tableName).update(snakeItem).eq('id', snakeItem.id);
-        if (error) throw error;
-        return snakeItem.id;
+        // update 同样使用容错机制
+        const changes = this._filterMissingCols(snakeItem);
+        const { error } = await supabase.from(this.tableName).update(changes).eq(this.primaryKey, pkVal);
+        if (error) {
+          const missingCol = extractMissingColumn(error);
+          if (missingCol) {
+            this._knownColumns.missing.add(missingCol);
+            return this.put(item);
+          }
+          throw error;
+        }
+        return pkVal;
       }
     }
     return this.add(item);
@@ -220,32 +329,46 @@ class SupabaseTable {
   }
 
   async bulkAdd(items) {
-    const ids = [];
-    for (const item of items) {
-      ids.push(await this.add(item));
-    }
-    return ids;
+    if (!items?.length) return [];
+    const snakeItems = items.map((it) => {
+      const s = toSnake(it);
+      const { [this.primaryKey]: _, ...rest } = s;
+      return rest;
+    });
+    const data = await this._safeInsert(snakeItems, false);
+    return (data || []).map((d) => d[this.primaryKey]);
   }
 
   async update(id, changes) {
     const snakeChanges = toSnake(changes);
-    const { error } = await supabase.from(this.tableName).update(snakeChanges).eq('id', id);
-    if (error) throw error;
+    const filtered = this._filterMissingCols(snakeChanges);
+    const { error } = await supabase.from(this.tableName).update(filtered).eq(this.primaryKey, id);
+    if (error) {
+      const missingCol = extractMissingColumn(error);
+      if (missingCol) {
+        this._knownColumns.missing.add(missingCol);
+        return this.update(id, changes);
+      }
+      throw error;
+    }
   }
 
   async delete(id) {
-    const { error } = await supabase.from(this.tableName).delete().eq('id', id);
+    const { error } = await supabase.from(this.tableName).delete().eq(this.primaryKey, id);
     if (error) throw error;
   }
 
   async clear() {
-    const { error } = await supabase.from(this.tableName).delete().neq('id', 0);
+    const { error } = await supabase.from(this.tableName).delete().neq(this.primaryKey, 0);
     if (error) throw error;
   }
 
   async count() {
     const { count, error } = await supabase.from(this.tableName).select('*', { count: 'exact', head: true });
-    if (error) throw error;
+    if (error) {
+      console.warn(`[count] ${this.tableName} 查询失败:`, error.message);
+      return 0;
+    }
     return count || 0;
   }
 }
@@ -261,8 +384,8 @@ const db = {
   stores: new SupabaseTable('stores'),
   savedViews: new SupabaseTable('saved_views'),
   operationLogs: new SupabaseTable('operation_logs'),
-  exchangeRate: new SupabaseTable('exchange_rate'),
-  translations: new SupabaseTable('translations'),
+  exchangeRate: new SupabaseTable('exchange_rate', 'currency_pair'),
+  translations: new SupabaseTable('translations', 'key'),
 
   async cleanAll() {
     await Promise.all([
@@ -320,24 +443,28 @@ export async function ensureInitialized() {
   }
 
   try {
-    const adminCount = await db.accounts.where('username').equals('admin').count();
-    if (adminCount === 0) {
+    const { data: existingAdmin, error: adminErr } = await supabase
+      .from('accounts')
+      .select('id')
+      .eq('username', 'admin')
+      .maybeSingle();
+    if (adminErr && adminErr.code !== 'PGRST116') {
+      console.warn('[初始化] 查询管理员失败:', adminErr.message);
+    } else if (!existingAdmin) {
       const adminHash = hashPassword('admin');
-      await db.accounts.add({
+      const { error: insertErr } = await supabase.from('accounts').insert({
         username: 'admin',
-        passwordHash: adminHash,
+        password_hash: adminHash,
         nickname: '管理员',
         level: 4,
-        mustChangePassword: false
+        must_change_password: false
       });
+      if (insertErr && !String(insertErr.message || '').includes('duplicate')) {
+        console.warn('[初始化] 管理员账户创建失败:', insertErr.message);
+      }
     }
   } catch (e) {
-    // 唯一键冲突说明管理员已存在，忽略
-    if (e.code === '23505' || (e.message && e.message.includes('duplicate'))) {
-      console.log('[初始化] 管理员账户已存在，跳过创建');
-    } else {
-      console.warn('[初始化] 管理员账户初始化失败:', e.message);
-    }
+    console.warn('[初始化] 管理员账户初始化失败:', e.message);
   }
 }
 
