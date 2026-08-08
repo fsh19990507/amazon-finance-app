@@ -1,7 +1,7 @@
 // 数据导入页 —— 支持亚马逊 6 类报表导入（交易明细/利润报表/英文结算/业务报告/广告报告/库存报告）
 // 上传后自动识别文件类型，按 dedupKey 去重入库，并记录导入日志
 // 云端不可达时数据保存在本地缓存，云端恢复后自动同步；云端未建表时给出建表引导
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Upload, Button, Card, Table, Tag, message, Modal, Statistic,
   Row, Col, Typography, Alert, Divider
@@ -36,6 +36,10 @@ function isMissingTableError(err) {
 export default function DataImport() {
   const [importing, setImporting] = useState(false);
   const [report, setReport] = useState(null);
+  // 批量导入队列：一次可拖入多个文件，逐个串行导入，避免并发写库冲突
+  const queueRef = useRef([]);
+  const processingRef = useRef(false);
+  const [progress, setProgress] = useState(null); // { done, total }
 
   // 6 类报表数据量统计（云端不可达时回退本地缓存）
   const transactionsCount = useLiveQuery(() => db.transactions.count(), [], 0);
@@ -50,8 +54,8 @@ export default function DataImport() {
     []
   );
 
-  const handleFile = async (file) => {
-    setImporting(true);
+  // 导入单个文件，返回该文件的处理结果（供批量队列汇总）
+  const importOneFile = async (file) => {
     try {
       const result = await parseExcelFile(file);
       const { fileType, rows, sheetName } = result;
@@ -59,7 +63,7 @@ export default function DataImport() {
       // 根据识别出的类型找到对应的数据库表；未知类型直接报错
       const config = FILE_TYPE_CONFIG[fileType];
       if (!config) {
-        throw new Error(`无法识别的文件类型：${fileType}。请到「帮助中心 → 报表字典」查看 6 类报表的正确格式`);
+        return { fileName: file.name, error: `无法识别的文件类型：${fileType}。请到「帮助中心 → 报表字典」查看 6 类报表的正确格式` };
       }
 
       let successCount = 0;
@@ -104,38 +108,75 @@ export default function DataImport() {
         }
       }
 
-      setReport({
+      return {
         fileName: file.name,
         fileType,
         totalParsed: rows.length,
         successCount,
         duplicateCount,
         errorCount
-      });
-      message.success(`${config.name}导入完成：成功 ${successCount} 条，重复 ${duplicateCount} 条`);
-
-      // 云端不可达时追加提示：数据已保存到本地缓存，恢复后自动同步
-      try {
-        const cloud = await checkCloudStatus();
-        if (cloud.status !== 'online') {
-          message.warning('数据已保存到本地，云端恢复后自动同步');
-        }
-      } catch (e) {
-        // 云端检测异常不影响导入结果
-        console.warn('云端状态检测失败:', String(e?.message || e));
-      }
+      };
     } catch (err) {
       console.error('导入失败:', err);
-      if (isMissingTableError(err)) {
-        // 云端存储异常：引导用户检查云端配置
-        message.error('数据写入失败（云端存储异常），可到「设置 → 云端同步」检查配置后重试');
-      } else {
-        message.error(`导入失败：${err.message}`);
-      }
-      setReport({ fileName: file.name, error: err.message });
-    } finally {
-      setImporting(false);
+      return { fileName: file.name, error: err.message };
     }
+  };
+
+  // 批量导入：依次处理队列里的所有文件，最后汇总成一份报告
+  const runQueue = async () => {
+    if (processingRef.current) return;
+    processingRef.current = true;
+    setImporting(true);
+    setReport(null);
+    const total = queueRef.current.length;
+    setProgress({ done: 0, total });
+    const results = [];
+    while (queueRef.current.length) {
+      const file = queueRef.current.shift();
+      setProgress((p) => ({ done: p.done + 1, total: p.total }));
+      // eslint-disable-next-line no-await-in-loop
+      results.push(await importOneFile(file));
+    }
+    processingRef.current = false;
+    setImporting(false);
+    setProgress(null);
+
+    // 汇总统计
+    const ok = results.filter((r) => !r.error);
+    const failed = results.filter((r) => r.error);
+    const totalParsed = ok.reduce((s, r) => s + (r.totalParsed || 0), 0);
+    const successCount = ok.reduce((s, r) => s + (r.successCount || 0), 0);
+    const duplicateCount = ok.reduce((s, r) => s + (r.duplicateCount || 0), 0);
+    setReport({ fileCount: results.length, totalParsed, successCount, duplicateCount, errorCount: failed.length, files: results });
+
+    if (ok.length) {
+      message.success(`批量导入完成：${ok.length} 个文件，成功 ${successCount} 条，重复 ${duplicateCount} 条`);
+    }
+    if (failed.length) {
+      message.warning(`${failed.length} 个文件导入失败，详见导入报告`);
+    }
+
+    // 云端不可达时追加提示：数据已保存到本地缓存，恢复后自动同步
+    try {
+      const cloud = await checkCloudStatus();
+      if (cloud.status !== 'online') {
+        message.warning('数据已保存到本地，云端恢复后自动同步');
+      }
+    } catch (e) {
+      // 云端检测异常不影响导入结果
+      console.warn('云端状态检测失败:', String(e?.message || e));
+    }
+  };
+
+  // 拖入/选择文件入口：加入队列并启动批量处理
+  const handleBeforeUpload = (file, fileList) => {
+    // 选择多个文件时，只用最后一个文件触发一次入队，避免重复
+    if (fileList && fileList.length > 1 && fileList[fileList.length - 1] !== file) {
+      return false;
+    }
+    const files = fileList && fileList.length ? fileList : [file];
+    queueRef.current.push(...files);
+    runQueue();
     return false; // 阻止 antd 默认上传
   };
 
@@ -194,44 +235,43 @@ export default function DataImport() {
       <Card style={{ marginBottom: 16 }}>
         <Dragger
           accept=".xlsx,.xls,.csv"
-          multiple={false}
+          multiple
           showUploadList={false}
-          beforeUpload={handleFile}
+          beforeUpload={handleBeforeUpload}
           disabled={importing}
         >
           <p className="ant-upload-drag-icon">
             <InboxOutlined />
           </p>
           <p className="ant-upload-text">
-            {importing ? '正在解析和导入...' : '点击或拖拽 Excel 文件到此区域上传'}
+            {importing
+              ? `正在解析和导入...（${progress?.done ?? 0}/${progress?.total ?? 0}）`
+              : '点击或拖拽 Excel 文件到此区域上传（支持一次选择多个文件）'}
           </p>
           <p className="ant-upload-hint">
-            支持 .xlsx / .csv 格式。系统将自动识别 6 类报表：交易明细、利润报表、英文结算报表、业务报告、广告报告、库存报告
+            支持 .xlsx / .csv 格式，可一次拖入多个文件批量导入。系统将自动识别 6 类报表：交易明细、利润报表、英文结算报表、业务报告、广告报告、库存报告
           </p>
         </Dragger>
       </Card>
 
       {report && (
         <Card title={<><FileExcelOutlined /> 导入报告</>} style={{ marginBottom: 16 }}>
-          {report.error ? (
+          {report.files && report.files.some((f) => f.error) && report.files.length === 1 ? (
             <Alert
               type="error"
               showIcon
-              message={`文件 ${report.fileName} 导入失败`}
-              description={report.error}
+              message={`文件 ${report.files[0].fileName} 导入失败`}
+              description={report.files[0].error}
             />
           ) : (
             <Row gutter={16}>
-              <Col span={6}>
-                <Statistic title="文件名" value={report.fileName} valueStyle={{ fontSize: 14 }} />
-              </Col>
               <Col span={4}>
-                <Statistic title="文件类型" value={typeText(report.fileType)} valueStyle={{ fontSize: 14 }} />
+                <Statistic title="文件数" value={report.fileCount} />
               </Col>
-              <Col span={4}>
+              <Col span={5}>
                 <Statistic title="解析条数" value={report.totalParsed} />
               </Col>
-              <Col span={4}>
+              <Col span={5}>
                 <Statistic
                   title="成功导入"
                   value={report.successCount}
@@ -239,7 +279,7 @@ export default function DataImport() {
                   prefix={<CheckCircleOutlined />}
                 />
               </Col>
-              <Col span={4}>
+              <Col span={5}>
                 <Statistic
                   title="重复跳过"
                   value={report.duplicateCount}
@@ -247,10 +287,38 @@ export default function DataImport() {
                   prefix={<WarningOutlined />}
                 />
               </Col>
-              <Col span={2}>
-                <Statistic title="异常" value={report.errorCount} valueStyle={{ color: '#cf1322' }} />
+              <Col span={5}>
+                <Statistic title="失败文件" value={report.errorCount} valueStyle={{ color: '#cf1322' }} />
               </Col>
             </Row>
+          )}
+          {report.files && report.files.length > 1 && (
+            <Table
+              size="small"
+              rowKey="fileName"
+              pagination={false}
+              dataSource={report.files}
+              style={{ marginTop: 12 }}
+              columns={[
+                { title: '文件名', dataIndex: 'fileName', ellipsis: true },
+                {
+                  title: '类型',
+                  dataIndex: 'fileType',
+                  width: 110,
+                  render: (t, r) => (r.error ? <Tag color="red">失败</Tag> : <Tag color="blue">{typeText(t)}</Tag>)
+                },
+                { title: '解析', dataIndex: 'totalParsed', width: 70, align: 'right' },
+                { title: '成功', dataIndex: 'successCount', width: 70, align: 'right' },
+                { title: '重复', dataIndex: 'duplicateCount', width: 70, align: 'right' },
+                {
+                  title: '说明',
+                  dataIndex: 'error',
+                  width: 200,
+                  ellipsis: true,
+                  render: (v) => v || ''
+                }
+              ]}
+            />
           )}
         </Card>
       )}
