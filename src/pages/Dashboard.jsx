@@ -255,6 +255,11 @@ export default function Dashboard() {
     return buildCalendarHeatmapOption(data, { title: '每日销售热力图', unit: '$' });
   }, [allTxs, activeMonth]);
   const heatmapChart = useECharts(heatmapOption, [heatmapOption], { toolbar: false, autoScale: false });
+  // 当前月份是否有交易明细（热力图数据源；有利润报表但无交易明细时给出明确提示）
+  const activeMonthHasTxs = useMemo(
+    () => Boolean(activeMonth && allTxs.some((t) => t.month === activeMonth && t.type === '订单付款')),
+    [activeMonth, allTxs]
+  );
 
   // KPI 卡片（含环比）
   const kpiCards = useMemo(() => {
@@ -455,7 +460,19 @@ export default function Dashboard() {
         {heatmapOption ? (
           <div ref={heatmapChart.ref} style={{ width: '100%', height: 180 }} />
         ) : (
-          <Empty description="无数据" style={{ padding: 40 }} />
+          <Empty
+            description={activeMonthHasTxs ? '无数据' : `「${activeMonth || '当前'}」月份没有交易明细，热力图无法显示`}
+            style={{ padding: 40 }}
+          />
+        )}
+        {activeMonth && !activeMonthHasTxs && allTxs.length > 0 && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginTop: 12 }}
+            message={`「${activeMonth}」月份没有「订单付款」类型的交易明细`}
+            description="热力图按天展示订单付款金额。如需查看该月热力图，请到「数据导入」上传该月的交易明细，或切换月份。"
+          />
         )}
       </Card>
 
