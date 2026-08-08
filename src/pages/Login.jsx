@@ -138,7 +138,17 @@ export default function Login() {
               style={{ borderRadius: 6 }}
             />
           )}
-          {cloudStatus === 'online' && (
+          {cloudStatus === 'online' && cloudDetail && cloudDetail.includes('本地模式') && (
+            <Alert
+              type="info"
+              showIcon
+              icon={<CloudSyncOutlined />}
+              message="本地模式（未配置 GitHub 云端）"
+              description="数据当前只存在本机浏览器。到「设置 → 云端同步」配置 GitHub 私有仓库，即可免费上云、跨设备同步。"
+              style={{ borderRadius: 6 }}
+            />
+          )}
+          {cloudStatus === 'online' && (!cloudDetail || !cloudDetail.includes('本地模式')) && (
             <Alert
               type="success"
               showIcon
@@ -197,9 +207,9 @@ export default function Login() {
             description={
               <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.9 }}>
                 <li><strong>仍可登录：</strong>系统会自动使用本地缓存账户登录，可正常查看已同步的数据</li>
-                <li><strong>建议操作：</strong>切换网络（如手机热点/公司网络）或开启代理后，点上方「重新检测」</li>
+                <li><strong>建议操作：</strong>检查网络后点上方「重新检测」；或在「设置 → 云端同步」配置 GitHub 免费云端</li>
                 <li><strong>离线不丢数据：</strong>新增/导入的数据会先保存在本地，云端恢复后自动同步</li>
-                <li><strong>若仍无法连接：</strong>多为 supabase.co 域名在国内网络受限，属网络环境问题，非系统故障</li>
+                <li><strong>云端方式：</strong>数据支持存到你的 GitHub 私有仓库（免费、国内可访问），设置 → 云端同步 一键配置</li>
               </ul>
             }
           />

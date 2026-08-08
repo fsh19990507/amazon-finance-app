@@ -27,7 +27,7 @@ const FILE_TYPE_CONFIG = {
   [FILE_TYPE.INVENTORY]: { table: db.inventoryRecords, name: '库存报告' }
 };
 
-// 云端表不存在错误识别（Supabase / PostgreSQL 常见错误关键词）
+// 云端存储错误识别（旧版 Supabase 兼容；GitHub 模式下多数错误不会触发）
 function isMissingTableError(err) {
   const msg = String(err?.message || err || '');
   return ['relation', 'does not exist', '42P01', 'could not'].some((k) => msg.includes(k));
@@ -98,7 +98,7 @@ export default function DataImport() {
         });
       } catch (logErr) {
         if (isMissingTableError(logErr)) {
-          message.warning('云端未创建对应数据表，请登录 Supabase 控制台执行 supabase_schema.sql 建表后重试');
+          message.warning('导入日志写入失败（云端存储异常），可到「设置 → 云端同步」检查配置');
         } else {
           console.error('写入导入日志失败:', logErr);
         }
@@ -127,8 +127,8 @@ export default function DataImport() {
     } catch (err) {
       console.error('导入失败:', err);
       if (isMissingTableError(err)) {
-        // 云端表不存在：引导用户建表
-        message.error('云端未创建对应数据表，请登录 Supabase 控制台执行 supabase_schema.sql 建表后重试');
+        // 云端存储异常：引导用户检查云端配置
+        message.error('数据写入失败（云端存储异常），可到「设置 → 云端同步」检查配置后重试');
       } else {
         message.error(`导入失败：${err.message}`);
       }

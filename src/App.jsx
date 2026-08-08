@@ -386,7 +386,7 @@ function AppLayout() {
             type="warning"
             showIcon
             icon={<DisconnectOutlined />}
-            message="当前为离线模式，数据来自本地缓存，云端恢复后自动同步"
+            message="云端暂不可用，数据来自本地缓存；网络恢复后自动同步。可到「设置 → 云端同步」配置 GitHub 免费云端"
             style={{ borderRadius: 0 }}
           />
         )}

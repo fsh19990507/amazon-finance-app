@@ -7,10 +7,13 @@ import {
 import {
   UserOutlined, TeamOutlined, ShopOutlined, DeleteOutlined,
   FileTextOutlined, SettingOutlined, PlusOutlined, EditOutlined,
-  ExclamationCircleOutlined, ReloadOutlined, BgColorsOutlined, CheckOutlined
+  ExclamationCircleOutlined, ReloadOutlined, BgColorsOutlined, CheckOutlined,
+  CloudUploadOutlined, CloudDownloadOutlined, ApiOutlined, GithubOutlined
 } from '@ant-design/icons';
 import { useLiveQuery } from '../hooks/useLiveQuery.js';
 import db, { hashPassword } from '../db/database.js';
+import { getGithubConfig, saveGithubConfig, hasGithubConfig, checkGithubStatus,
+  flushPending, pushFullDb, refreshFromCloud, readCachedDb, createEmptyDb } from '../db/githubStore.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { PERM, permLevelName } from '../utils/permissions.js';
@@ -54,6 +57,11 @@ export default function Settings() {
       key: 'theme',
       label: <span><BgColorsOutlined />外观主题</span>,
       children: <ThemeSettings />
+    },
+    {
+      key: 'cloud',
+      label: <span><CloudUploadOutlined />云端同步</span>,
+      children: <CloudSettings />
     }
   ];
 
@@ -900,6 +908,203 @@ function LogViewer() {
         pagination={{ pageSize: 20 }}
         scroll={{ x: 800 }}
       />
+    </div>
+  );
+}
+
+// ============= 云端同步（GitHub 免费存储） =============
+function CloudSettings() {
+  const [owner, setOwner] = useState('');
+  const [repo, setRepo] = useState('');
+  const [branch, setBranch] = useState('main');
+  const [token, setToken] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [status, setStatus] = useState(null); // {type:'success'|'error'|'info', text}
+  const [configured, setConfigured] = useState(hasGithubConfig());
+
+  // 初始化表单：读取已保存的配置（token 已填则回显）
+  React.useEffect(() => {
+    const cfg = getGithubConfig();
+    if (cfg) {
+      setOwner(cfg.owner || '');
+      setRepo(cfg.repo || '');
+      setBranch(cfg.branch || 'main');
+      setToken(cfg.token || '');
+    }
+  }, []);
+
+  // 测试连接
+  const handleTest = async () => {
+    if (!owner || !repo || !token) {
+      setStatus({ type: 'error', text: '请先填写 owner / 仓库名 / Token 三项' });
+      return;
+    }
+    setTesting(true);
+    setStatus(null);
+    // 临时保存配置以便检测
+    saveGithubConfig({ owner, repo, branch, token });
+    const r = await checkGithubStatus();
+    setTesting(false);
+    if (r.status === 'online') {
+      setStatus({ type: 'success', text: '连接成功！已能读写该 GitHub 仓库' });
+    } else {
+      setStatus({ type: 'error', text: '连接失败：' + r.detail });
+    }
+  };
+
+  // 保存配置
+  const handleSave = async () => {
+    if (!owner || !repo || !token) {
+      setStatus({ type: 'error', text: '请先填写 owner / 仓库名 / Token 三项' });
+      return;
+    }
+    setSyncing(true);
+    setStatus(null);
+    saveGithubConfig({ owner, repo, branch, token });
+    const r = await checkGithubStatus();
+    if (r.status !== 'online') {
+      setSyncing(false);
+      setConfigured(true);
+      setStatus({ type: 'error', text: '已保存配置，但连接失败：' + r.detail });
+      return;
+    }
+    // 连接成功：先把本地数据推送到云端（首次迁移）
+    setStatus({ type: 'info', text: '连接成功，正在把本地数据推送到云端...' });
+    const localDb = readCachedDb() || createEmptyDb();
+    const up = await pushFullDb(localDb);
+    setSyncing(false);
+    setConfigured(true);
+    if (up.ok) {
+      setStatus({ type: 'success', text: '配置完成，本地数据已同步到 GitHub 云端！' });
+    } else {
+      setStatus({ type: 'error', text: '数据推送失败：' + up.message });
+    }
+  };
+
+  // 手动从云端拉取（覆盖本地）
+  const handlePull = async () => {
+    setSyncing(true);
+    setStatus(null);
+    const r = await refreshFromCloud();
+    setSyncing(false);
+    if (r.changed) {
+      setStatus({ type: 'success', text: '已从云端拉取最新数据（本地缓存已更新）' });
+    } else {
+      setStatus({ type: 'info', text: '云端与本地数据一致，无需更新' });
+    }
+  };
+
+  // 手动推送到云端
+  const handlePush = async () => {
+    setSyncing(true);
+    setStatus(null);
+    const r = await flushPending(readCachedDb() || createEmptyDb());
+    setSyncing(false);
+    if (r.ok) {
+      setStatus({ type: 'success', text: '本地数据已推送到云端' });
+    } else {
+      setStatus({ type: 'error', text: '推送失败：' + (r.message || '未知错误') });
+    }
+  };
+
+  return (
+    <div>
+      <Alert
+        type="info"
+        showIcon
+        message="GitHub 免费云端存储（替代 Supabase）"
+        description="数据以 JSON 形式存到你的私有 GitHub 仓库，完全免费、国内可访问、跨设备同步。页面读取走本地缓存（毫秒级秒开），云端在后台静默同步。"
+        style={{ marginBottom: 16 }}
+      />
+
+      {/* 连接状态 */}
+      {configured && (
+        <Alert
+          type="success"
+          showIcon
+          icon={<GithubOutlined />}
+          message={`已配置：${getGithubConfig()?.owner}/${getGithubConfig()?.repo}`}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
+      <Card title="1. 获取 GitHub Token（一次性）" size="small" style={{ marginBottom: 16 }}>
+        <ol style={{ margin: 0, paddingLeft: 20, lineHeight: 2, fontSize: 13 }}>
+          <li>打开 <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer">GitHub → Settings → Developer settings → Personal access tokens</a></li>
+          <li>点击 <strong>Generate new token (classic)</strong>，勾选 <strong>repo</strong> 权限（读写仓库）</li>
+          <li>生成后复制 Token（只显示一次），粘贴到下面输入框</li>
+        </ol>
+      </Card>
+
+      <Card title="2. 云端配置" size="small" style={{ marginBottom: 16 }}>
+        <Form layout="vertical">
+          <Row gutter={16}>
+            <Col xs={24} md={8}>
+              <Form.Item label="GitHub 用户名（owner）" required>
+                <Input
+                  placeholder="如 fsh19990507"
+                  value={owner}
+                  onChange={(e) => setOwner(e.target.value.trim())}
+                  prefix={<GithubOutlined />}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item label="数据仓库名（repo）" required>
+                <Input
+                  placeholder="如 amazon-finance-data"
+                  value={repo}
+                  onChange={(e) => setRepo(e.target.value.trim())}
+                  prefix={<ApiOutlined />}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item label="分支">
+                <Input value={branch} onChange={(e) => setBranch(e.target.value.trim() || 'main')} />
+              </Form.Item>
+            </Col>
+            <Col xs={24}>
+              <Form.Item label="Personal Access Token" required extra="Token 只保存在你本机浏览器，不会上传到别处。若担心泄露可随时到 GitHub 撤销重生成。">
+                <Input.Password
+                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value.trim())}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Space>
+            <Button icon={<ApiOutlined />} loading={testing} onClick={handleTest}>测试连接</Button>
+            <Button type="primary" icon={<CloudUploadOutlined />} loading={syncing} onClick={handleSave}>
+              {configured ? '保存并同步' : '保存配置并首次同步'}
+            </Button>
+          </Space>
+        </Form>
+        {status && (
+          <Alert
+            type={status.type}
+            showIcon
+            message={status.text}
+            style={{ marginTop: 12 }}
+          />
+        )}
+      </Card>
+
+      <Card title="3. 手动同步（可选）" size="small">
+        <Space>
+          <Button icon={<CloudUploadOutlined />} onClick={handlePush} loading={syncing} disabled={!configured}>
+            推送到云端
+          </Button>
+          <Button icon={<CloudDownloadOutlined />} onClick={handlePull} loading={syncing} disabled={!configured}>
+            从云端拉取
+          </Button>
+        </Space>
+        <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>
+          提示：日常使用无需手动操作。导入/修改数据后系统会自动同步（约 2 秒内）；云端恢复后自动补传。
+        </div>
+      </Card>
     </div>
   );
 }
