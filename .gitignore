@@ -1,6 +1,0 @@
-node_modules
-gh-pages-temp
-*.log
-*.xlsx
-*.json
-!package.json
