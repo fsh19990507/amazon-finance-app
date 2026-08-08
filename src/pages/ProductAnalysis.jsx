@@ -13,7 +13,7 @@ import * as XLSX from 'xlsx';
 import dayjs from 'dayjs';
 import db from '../db/database.js';
 import { formatMoney } from '../utils/parsers.js';
-import { aggregateByProduct } from '../utils/dataAggregator.js';
+import { aggregateByProduct, matchesStoreId } from '../utils/dataAggregator.js';
 import { useECharts, chartColorsFor } from '../utils/useECharts.js';
 import { useStore } from '../context/StoreContext.jsx';
 import { useRate } from '../context/RateContext.jsx';
@@ -110,7 +110,7 @@ export default function ProductAnalysis() {
   const storeTransactions = useMemo(() => {
     if (!allTransactions) return [];
     if (currentStoreId === 'all' || !currentStoreId) return allTransactions;
-    return allTransactions.filter((t) => t.storeId === currentStoreId);
+    return allTransactions.filter((t) => matchesStoreId(t, currentStoreId));
   }, [allTransactions, currentStoreId]);
 
   const dateRange = useMemo(() => getDateRange(quickDate, customDateRange), [quickDate, customDateRange]);

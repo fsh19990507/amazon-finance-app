@@ -12,7 +12,7 @@ import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import db from '../db/database.js';
 import { formatMoney } from '../utils/parsers.js';
-import { buildExpenseBreakdown, EXPENSE_ITEMS, detectAnomalies } from '../utils/dataAggregator.js';
+import { buildExpenseBreakdown, EXPENSE_ITEMS, detectAnomalies, matchesStoreId } from '../utils/dataAggregator.js';
 import { useECharts, chartColorsFor } from '../utils/useECharts.js';
 import { useStore } from '../context/StoreContext.jsx';
 import { useRate } from '../context/RateContext.jsx';
@@ -59,7 +59,7 @@ export default function ExpenseAnalysis() {
   const storeReports = useMemo(() => {
     if (!profitReports) return [];
     if (currentStoreId === 'all' || !currentStoreId) return profitReports;
-    return profitReports.filter((r) => r.storeId === currentStoreId);
+    return profitReports.filter((r) => matchesStoreId(r, currentStoreId));
   }, [profitReports, currentStoreId]);
 
   const sortedReports = useMemo(() => {
@@ -373,7 +373,8 @@ export default function ExpenseAnalysis() {
                 style={{
                   width: `${Math.min(100, parseFloat(pct))}%`,
                   height: '100%',
-                  background: r.group === '广告花费' ? '#cf1322' : '#1890ff',
+                  // 进度条颜色与金额正负色一致：负值(支出)红、正值(收入冲减)绿
+                  background: r.value < 0 ? '#cf1322' : '#3f8600',
                   borderRadius: 2
                 }}
               />

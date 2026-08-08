@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
-import { ensureInitialized } from './db/database.js';
+import db, { ensureInitialized } from './db/database.js';
 import 'antd/dist/reset.css';
 
 // 启动策略：先渲染应用（UI 立即响应），后台异步执行种子数据初始化
@@ -21,6 +21,8 @@ async function bootstrap() {
   (async () => {
     try {
       await ensureInitialized();
+      // 3. 存量数据店铺归属迁移（旧数据无 storeId 时补齐，幂等）
+      await db.migrateStoreIds();
       console.log('[启动] 种子数据检查完成');
     } catch (e) {
       console.warn('[启动] 种子数据初始化失败:', e.message);

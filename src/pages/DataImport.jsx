@@ -13,6 +13,9 @@ import {
 import { useLiveQuery } from '../hooks/useLiveQuery.js';
 import db, { checkCloudStatus } from '../db/database.js';
 import { parseExcelFile, FILE_TYPE } from '../utils/excelImporter.js';
+import { useStore } from '../context/StoreContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
+import { PERM } from '../utils/permissions.js';
 
 const { Dragger } = Upload;
 const { Text, Title } = Typography;
@@ -40,6 +43,31 @@ export default function DataImport() {
   const queueRef = useRef([]);
   const processingRef = useRef(false);
   const [progress, setProgress] = useState(null); // { done, total }
+  // 店铺上下文：导入的数据归属当前选中店铺；权限：清空全部数据需管理员
+  const { stores, currentStoreId } = useStore();
+  const { can } = useAuth();
+
+  // 给导入的数据行补写店铺归属（storeId）
+  // 规则：利润报表优先按 Excel「店铺」名称匹配 stores 表；其余/未命中归入当前选中店铺；
+  //       顶栏为「全部店铺」时回退到第一个店铺，避免数据无归属
+  const assignStoreToRows = async (rows, fileType) => {
+    if (!rows || !rows.length) return rows;
+    const targetStoreId = currentStoreId && currentStoreId !== 'all'
+      ? currentStoreId
+      : (stores && stores.length ? stores[0].id : 'default');
+    // 利润报表：按 Excel 店铺名匹配 stores 表
+    if (fileType === FILE_TYPE.PROFIT && stores && stores.length) {
+      const nameToId = new Map(stores.map((s) => [String(s.name || '').trim(), s.id]));
+      for (const row of rows) {
+        const matched = row.store && nameToId.get(String(row.store).trim());
+        row.storeId = matched || targetStoreId;
+      }
+      return rows;
+    }
+    // 其余 5 类报表（交易明细/结算/业务/广告/库存）：无店铺列，统一归入目标店铺
+    for (const row of rows) row.storeId = targetStoreId;
+    return rows;
+  };
 
   // 6 类报表数据量统计（云端不可达时回退本地缓存）
   const transactionsCount = useLiveQuery(() => db.transactions.count(), [], 0);
@@ -85,7 +113,11 @@ export default function DataImport() {
         if (existingKeys.has(row.dedupKey)) duplicateCount++;
         else newRows.push(row);
       }
-      if (newRows.length) await config.table.bulkAdd(newRows);
+      // 补写店铺归属（storeId）后再入库，保证各分析页能按店铺正确过滤
+      if (newRows.length) {
+        await assignStoreToRows(newRows, fileType);
+        await config.table.bulkAdd(newRows);
+      }
       successCount = newRows.length;
 
       // 写入导入日志（失败不阻塞导入结果，只提示）
@@ -181,6 +213,11 @@ export default function DataImport() {
   };
 
   const handleClearAll = () => {
+    // 权限校验：清空全部数据仅管理员（Lv.4）可操作
+    if (!can(PERM.DELETE_ALL)) {
+      message.error('需要管理员权限才能清空全部数据');
+      return;
+    }
     Modal.confirm({
       title: '确认清空所有数据？',
       content: '将删除全部 6 类报表（交易明细/利润报表/英文结算/业务报告/广告报告/库存报告）数据，操作不可恢复。',
@@ -223,11 +260,11 @@ export default function DataImport() {
         ))}
       </Row>
 
-      {/* 数据管理 */}
+      {/* 数据管理（清空全部数据仅管理员可操作） */}
       <Row justify="end" style={{ marginBottom: 16 }}>
         <Col>
-          <Button danger size="small" icon={<DeleteOutlined />} onClick={handleClearAll}>
-            清空所有数据
+          <Button danger size="small" icon={<DeleteOutlined />} onClick={handleClearAll} disabled={!can(PERM.DELETE_ALL)}>
+            清空所有数据{!can(PERM.DELETE_ALL) ? '（仅管理员）' : ''}
           </Button>
         </Col>
       </Row>

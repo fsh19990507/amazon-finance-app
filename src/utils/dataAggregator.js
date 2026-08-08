@@ -4,13 +4,26 @@ import db from '../db/database.js';
 // ============== 基础查询 ==============
 
 /**
+ * 判断数据行是否属于指定店铺（兼容无 storeId 的存量数据：归入默认店铺）
+ * @param {Object} row 数据行
+ * @param {string} storeId 店铺 ID；'all'/空 表示不限制
+ */
+export function matchesStoreId(row, storeId) {
+  if (!storeId || storeId === 'all') return true;
+  if (storeId === 'default') {
+    return row?.storeId === 'default' || !row?.storeId;
+  }
+  return row?.storeId === storeId;
+}
+
+/**
  * 取所有利润报表（按月份升序）
  * @param {string} [storeId] 店铺 ID，不传则全部
  */
 export async function getAllProfitReports(storeId) {
   let all;
   if (storeId && storeId !== 'all') {
-    all = await db.profitReports.where('storeId').equals(storeId).toArray();
+    all = (await db.profitReports.toArray()).filter((r) => matchesStoreId(r, storeId));
   } else {
     all = await db.profitReports.toArray();
   }
@@ -24,7 +37,7 @@ export async function getAllProfitReports(storeId) {
 export async function getAllTransactions(storeId) {
   let all;
   if (storeId && storeId !== 'all') {
-    all = await db.transactions.where('storeId').equals(storeId).toArray();
+    all = (await db.transactions.toArray()).filter((t) => matchesStoreId(t, storeId));
   } else {
     all = await db.transactions.toArray();
   }

@@ -155,13 +155,13 @@ export function buildWaterfallOption(items, { title = '', unit = '$' } = {}) {
   items.forEach((it) => {
     labels.push(it.name);
     if (it.isTotal) {
-      // 总计柱：从0开始，单独显示（不参与堆叠递进）
+      // 总计柱：从0开始，单独显示（不参与堆叠递进）；正绿负红，与 KPI 卡片一致
       baseData.push(0);
       valueData.push({
         value: it.value,
         itemStyle: {
-          color: it.value >= 0 ? '#1e3a5f' : '#cf1322',
-          borderColor: it.value >= 0 ? '#0a1e3a' : '#a8071a',
+          color: it.value >= 0 ? '#3f8600' : '#cf1322',
+          borderColor: it.value >= 0 ? '#237804' : '#a8071a',
           borderWidth: 1
         }
       });

@@ -13,7 +13,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import db from '../db/database.js';
 import { formatMoney } from '../utils/parsers.js';
-import { detectAnomalies } from '../utils/dataAggregator.js';
+import { detectAnomalies, matchesStoreId } from '../utils/dataAggregator.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useStore } from '../context/StoreContext.jsx';
 import { useRate } from '../context/RateContext.jsx';
@@ -125,7 +125,7 @@ export default function TransactionList() {
   const storeTransactions = useMemo(() => {
     if (!allTransactions) return [];
     if (currentStoreId === 'all' || !currentStoreId) return allTransactions;
-    return allTransactions.filter((t) => t.storeId === currentStoreId);
+    return allTransactions.filter((t) => matchesStoreId(t, currentStoreId));
   }, [allTransactions, currentStoreId]);
 
   const dateRange = useMemo(() => getDateRange(quickDate, customDateRange), [quickDate, customDateRange]);

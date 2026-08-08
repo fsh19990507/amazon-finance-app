@@ -412,6 +412,47 @@ const db = {
     }
   },
 
+  /**
+   * 存量数据店铺归属迁移（一次性，幂等）
+   * 旧版本导入的数据没有 storeId，导致按店铺过滤时全部不可见。
+   * 规则：利润报表优先按 Excel「店铺」名称匹配 stores 表；
+   *       匹配不到或无名称列的表（交易/结算/业务/广告/库存）统一归入默认店铺。
+   * 用 localStorage 标记 amz_store_migrated 防止重复执行。
+   */
+  async migrateStoreIds() {
+    try {
+      if (localStorage.getItem('amz_store_migrated')) return;
+      const stores = await this.stores.toArray();
+      const nameToId = new Map(stores.map((s) => [String(s.name || '').trim(), s.id]));
+
+      // 利润报表：按店铺名称匹配
+      const profits = await this.profitReports.toArray();
+      let profitChanged = false;
+      for (const p of profits) {
+        if (p.storeId) continue;
+        const matched = p.store && nameToId.get(String(p.store).trim());
+        p.storeId = matched || 'default';
+        profitChanged = true;
+      }
+      if (profitChanged) await this.profitReports.bulkPut(profits);
+
+      // 交易/结算/业务/广告/库存：无名称列，统一归入默认店铺
+      for (const t of ['transactions', 'settlements', 'business_reports', 'ad_reports', 'inventory_records']) {
+        const rows = await this[t].toArray();
+        const needFix = rows.filter((r) => !r.storeId);
+        if (!needFix.length) continue;
+        for (const r of needFix) r.storeId = 'default';
+        await this[t].bulkPut(rows);
+      }
+
+      localStorage.setItem('amz_store_migrated', '1');
+      console.log('[数据迁移] 店铺归属迁移完成');
+    } catch (e) {
+      // 迁移失败不阻塞启动，下次启动会重试
+      console.warn('[数据迁移] 店铺归属迁移失败:', e?.message || e);
+    }
+  },
+
   async factoryReset() {
     await this.cleanAll();
     for (const t of ['accounts', 'roles', 'stores', 'saved_views', 'exchange_rate', 'translations']) {

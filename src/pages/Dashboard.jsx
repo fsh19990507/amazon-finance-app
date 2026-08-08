@@ -23,7 +23,8 @@ import {
   buildDailyHeatmapData,
   buildWaterfallItems,
   getAllTransactions,
-  getAllProfitReports
+  getAllProfitReports,
+  matchesStoreId
 } from '../utils/dataAggregator.js';
 import { useECharts, buildWaterfallOption, buildCalendarHeatmapOption, chartColorsFor } from '../utils/useECharts.js';
 import { useStore } from '../context/StoreContext.jsx';
@@ -57,11 +58,11 @@ export default function Dashboard() {
     null
   );
 
-  // 过滤当前店铺的利润报表
+  // 过滤当前店铺的利润报表（兼容无 storeId 的存量数据：归入默认店铺）
   const storeReports = useMemo(() => {
     if (!profitReports) return [];
     if (currentStoreId === 'all' || !currentStoreId) return profitReports;
-    return profitReports.filter((r) => r.storeId === currentStoreId);
+    return profitReports.filter((r) => matchesStoreId(r, currentStoreId));
   }, [profitReports, currentStoreId]);
 
   const sortedReports = useMemo(() => {
@@ -83,7 +84,7 @@ export default function Dashboard() {
     return () => { cancelled = true; };
   }, [currentStoreId, activeMonth, compareMode, compareStoreIds, profitReports]);
 
-  // 维度切换 → 真正拉数据
+  // 维度切换 → 真正拉数据（getProfitSeriesByDimension 内部已按店铺过滤）
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -92,18 +93,10 @@ export default function Dashboard() {
         dimension === 'custom' ? customRange : undefined,
         currentStoreId
       );
-      // 按店铺过滤
-      let filtered = s;
-      if (currentStoreId !== 'all' && currentStoreId && sortedReports.length) {
-        filtered = s.filter((item) => {
-          const r = storeReports.find((r) => r.month === item.key);
-          return !!r;
-        });
-      }
-      if (!cancelled) setSeries(filtered);
+      if (!cancelled) setSeries(s);
     })();
     return () => { cancelled = true; };
-  }, [dimension, customRange, storeReports, currentStoreId]);
+  }, [dimension, customRange, currentStoreId]);
 
   // 默认选最新月份
   useEffect(() => {
