@@ -11,9 +11,10 @@ import {
   CloudUploadOutlined, CloudDownloadOutlined, ApiOutlined, GithubOutlined
 } from '@ant-design/icons';
 import { useLiveQuery } from '../hooks/useLiveQuery.js';
-import db, { hashPassword } from '../db/database.js';
+import db, { hashPassword, pullFromCloud } from '../db/database.js';
 import { getGithubConfig, saveGithubConfig, hasGithubConfig, checkGithubStatus,
-  flushPending, pushFullDb, refreshFromCloud, readCachedDb, createEmptyDb } from '../db/githubStore.js';
+  flushPending, pushFullDb, refreshFromCloud, readCachedDb, createEmptyDb,
+  testGithubConnection, fetchCloudDb } from '../db/githubStore.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { PERM, permLevelName } from '../utils/permissions.js';
@@ -469,12 +470,24 @@ function StoreManager() {
       return;
     }
     try {
+      // 先把该店铺全部 6 张业务表的数据迁移到 default，迁移成功后再删店铺（保证原子性）
+      const migrateTables = [
+        ['transactions', db.transactions],
+        ['profit_reports', db.profitReports],
+        ['settlements', db.settlements],
+        ['business_reports', db.businessReports],
+        ['ad_reports', db.adReports],
+        ['inventory_records', db.inventoryRecords]
+      ];
+      for (const [, table] of migrateTables) {
+        const rows = await table.toArray();
+        let changed = false;
+        for (const r of rows) {
+          if (r.storeId === s.id) { r.storeId = 'default'; changed = true; }
+        }
+        if (changed) await table.bulkPut(rows);
+      }
       await db.stores.delete(s.id);
-      // 把该店铺的数据迁移到 default
-      const txs = await db.transactions.where('storeId').equals(s.id).toArray();
-      for (const t of txs) await db.transactions.update(t.id, { storeId: 'default' });
-      const prs = await db.profitReports.where('storeId').equals(s.id).toArray();
-      for (const p of prs) await db.profitReports.update(p.id, { storeId: 'default' });
       await writeLog({
         accountId: currentAccount?.id,
         action: LOG_ACTIONS.DELETE_STORE,
@@ -647,14 +660,31 @@ function DataManager() {
 
   const doDeleteStore = async (storeId) => {
     try {
-      const txDel = await db.transactions.where('storeId').equals(storeId).delete();
-      const prDel = await db.profitReports.where('storeId').equals(storeId).delete();
+      // 删除该店铺全部 6 张业务表的数据（交易/利润/结算/业务/广告/库存）
+      const delTables = [
+        ['transactions', db.transactions],
+        ['profit_reports', db.profitReports],
+        ['settlements', db.settlements],
+        ['business_reports', db.businessReports],
+        ['ad_reports', db.adReports],
+        ['inventory_records', db.inventoryRecords]
+      ];
+      let txDel = 0; let prDel = 0; let otherDel = 0;
+      for (const [name, table] of delTables) {
+        const rows = await table.toArray();
+        const kept = rows.filter((r) => r.storeId !== storeId);
+        const removed = rows.length - kept.length;
+        if (name === 'transactions') txDel = removed;
+        else if (name === 'profit_reports') prDel = removed;
+        else otherDel += removed;
+        if (removed) await table.bulkPut(kept);
+      }
       await writeLog({
         accountId: currentAccount?.id,
         action: LOG_ACTIONS.DELETE_BY_STORE,
         targetType: 'store',
         targetId: storeId,
-        detail: `删除店铺 ${storeId} 数据：${txDel} 条交易，${prDel} 条利润报表`
+        detail: `删除店铺 ${storeId} 数据：${txDel} 条交易，${prDel} 条利润报表，其他 ${otherDel} 条`
       });
       message.success('删除成功');
       refreshCounts();
@@ -721,7 +751,7 @@ function DataManager() {
     Modal.confirm({
       title: '工厂重置（危险！）',
       icon: <ExclamationCircleOutlined style={{ color: 'red' }} />,
-      content: '这将删除所有数据（包括账户、店铺、配置），恢复到初始状态。\n默认账户 admin/admin123 将重新创建。\n确定要继续吗？',
+      content: '这将删除所有数据（包括账户、店铺、配置），恢复到初始状态。\n默认账户 admin/admin 将重新创建。\n确定要继续吗？',
       okText: '确认重置',
       okType: 'danger',
       cancelText: '取消',
@@ -836,7 +866,7 @@ function DataManager() {
           恢复出厂设置
         </Button>
         <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
-          删除所有数据，恢复默认账户 admin/admin123
+          删除所有数据，恢复默认账户 admin/admin
         </Text>
       </Card>
     </div>
@@ -914,6 +944,9 @@ function LogViewer() {
 
 // ============= 云端同步（GitHub 免费存储） =============
 function CloudSettings() {
+  const { can } = useAuth();
+  // 云端配置属系统级操作，仅管理员可修改/推送/拉取
+  const canManageCloud = can(PERM.MANAGE_ACCOUNTS);
   const [owner, setOwner] = useState('');
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
@@ -934,17 +967,16 @@ function CloudSettings() {
     }
   }, []);
 
-  // 测试连接
+  // 测试连接（用临时配置探测，不保存、不清缓存）
   const handleTest = async () => {
+    if (!canManageCloud) { setStatus({ type: 'error', text: '仅管理员可测试云端连接' }); return; }
     if (!owner || !repo || !token) {
       setStatus({ type: 'error', text: '请先填写 owner / 仓库名 / Token 三项' });
       return;
     }
     setTesting(true);
     setStatus(null);
-    // 临时保存配置以便检测
-    saveGithubConfig({ owner, repo, branch, token });
-    const r = await checkGithubStatus();
+    const r = await testGithubConnection(owner, repo, branch, token);
     setTesting(false);
     if (r.status === 'online') {
       setStatus({ type: 'success', text: '连接成功！已能读写该 GitHub 仓库' });
@@ -955,6 +987,7 @@ function CloudSettings() {
 
   // 保存配置
   const handleSave = async () => {
+    if (!canManageCloud) { setStatus({ type: 'error', text: '仅管理员可保存云端配置' }); return; }
     if (!owner || !repo || !token) {
       setStatus({ type: 'error', text: '请先填写 owner / 仓库名 / Token 三项' });
       return;
@@ -969,27 +1002,44 @@ function CloudSettings() {
       setStatus({ type: 'error', text: '已保存配置，但连接失败：' + r.detail });
       return;
     }
-    // 连接成功：先把本地数据推送到云端（首次迁移）
-    setStatus({ type: 'info', text: '连接成功，正在把本地数据推送到云端...' });
+    // 连接成功：按云端/本地数据情况选择同步方向，绝不盲目用空库覆盖云端
+    setStatus({ type: 'info', text: '连接成功，正在同步数据...' });
     const localDb = readCachedDb() || createEmptyDb();
-    const up = await pushFullDb(localDb);
+    const localHasData = Object.values(localDb.tables || {}).some((arr) => Array.isArray(arr) && arr.length > 0);
+    const cloud = await fetchCloudDb();
+    const cloudHasData = !!(cloud && Object.values(cloud.db.tables || {}).some((arr) => Array.isArray(arr) && arr.length > 0));
+    let syncRes;
+    if (cloudHasData && !localHasData) {
+      // 云端已有数据、本地为空（如新设备/被清过缓存）：拉云端而非覆盖
+      const pullRes = await pullFromCloud();
+      syncRes = { ok: pullRes.changed !== false, pulled: true };
+    } else if (localHasData && !cloudHasData) {
+      // 本地有数据、云端为空：首次迁移上传
+      syncRes = await pushFullDb(localDb);
+    } else {
+      // 两边都有数据：合并推送（本地脏表优先），不整库覆盖
+      syncRes = await flushPending(localDb);
+    }
     setSyncing(false);
     setConfigured(true);
-    if (up.ok) {
-      setStatus({ type: 'success', text: '配置完成，本地数据已同步到 GitHub 云端！' });
+    if (syncRes.ok) {
+      setStatus({ type: 'success', text: syncRes.pulled
+        ? '配置完成，已从云端拉取数据（未覆盖云端）'
+        : '配置完成，本地数据已同步到 GitHub 云端！' });
     } else {
-      setStatus({ type: 'error', text: '数据推送失败：' + up.message });
+      setStatus({ type: 'error', text: '数据同步失败：' + (syncRes.message || '未知错误') });
     }
   };
 
-  // 手动从云端拉取（覆盖本地）
+  // 手动从云端拉取（立即刷新内存与页面）
   const handlePull = async () => {
+    if (!canManageCloud) { setStatus({ type: 'error', text: '仅管理员可拉取云端数据' }); return; }
     setSyncing(true);
     setStatus(null);
-    const r = await refreshFromCloud();
+    const r = await pullFromCloud();
     setSyncing(false);
     if (r.changed) {
-      setStatus({ type: 'success', text: '已从云端拉取最新数据（本地缓存已更新）' });
+      setStatus({ type: 'success', text: '已从云端拉取最新数据，页面已刷新' });
     } else {
       setStatus({ type: 'info', text: '云端与本地数据一致，无需更新' });
     }
@@ -997,12 +1047,13 @@ function CloudSettings() {
 
   // 手动推送到云端
   const handlePush = async () => {
+    if (!canManageCloud) { setStatus({ type: 'error', text: '仅管理员可推送云端数据' }); return; }
     setSyncing(true);
     setStatus(null);
     const r = await flushPending(readCachedDb() || createEmptyDb());
     setSyncing(false);
     if (r.ok) {
-      setStatus({ type: 'success', text: '本地数据已推送到云端' });
+      setStatus({ type: 'success', text: r.raced ? '推送完成，期间新写入已保留待同步' : '本地数据已推送到云端' });
     } else {
       setStatus({ type: 'error', text: '推送失败：' + (r.message || '未知错误') });
     }
@@ -1076,11 +1127,16 @@ function CloudSettings() {
             </Col>
           </Row>
           <Space>
-            <Button icon={<ApiOutlined />} loading={testing} onClick={handleTest}>测试连接</Button>
-            <Button type="primary" icon={<CloudUploadOutlined />} loading={syncing} onClick={handleSave}>
+            <Button icon={<ApiOutlined />} loading={testing} onClick={handleTest} disabled={!canManageCloud}>测试连接</Button>
+            <Button type="primary" icon={<CloudUploadOutlined />} loading={syncing} onClick={handleSave} disabled={!canManageCloud}>
               {configured ? '保存并同步' : '保存配置并首次同步'}
             </Button>
           </Space>
+          {!canManageCloud && (
+            <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>
+              云端配置属系统级操作，仅管理员（Lv.4）可修改。当前为只读。
+            </div>
+          )}
         </Form>
         {status && (
           <Alert
@@ -1094,15 +1150,15 @@ function CloudSettings() {
 
       <Card title="3. 手动同步（可选）" size="small">
         <Space>
-          <Button icon={<CloudUploadOutlined />} onClick={handlePush} loading={syncing} disabled={!configured}>
+          <Button icon={<CloudUploadOutlined />} onClick={handlePush} loading={syncing} disabled={!configured || !canManageCloud}>
             推送到云端
           </Button>
-          <Button icon={<CloudDownloadOutlined />} onClick={handlePull} loading={syncing} disabled={!configured}>
+          <Button icon={<CloudDownloadOutlined />} onClick={handlePull} loading={syncing} disabled={!configured || !canManageCloud}>
             从云端拉取
           </Button>
         </Space>
         <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>
-          提示：日常使用无需手动操作。导入/修改数据后系统会自动同步（约 2 秒内）；云端恢复后自动补传。
+          提示：日常使用无需手动操作。导入/修改数据后系统会自动同步（约 2 秒内）；离线期间写入会保留待同步，网络恢复后自动补传。
         </div>
       </Card>
     </div>

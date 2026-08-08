@@ -19,6 +19,17 @@ export function StoreProvider({ children }) {
     localStorage.setItem(CURRENT_STORE_KEY, currentStoreId);
   }, [currentStoreId]);
 
+  // 当前选中店铺有效性守卫：店铺被删除后，若 localStorage 仍残留旧 id，
+  // 自动回退到「全部店铺」，避免所有页面按不存在的店铺过滤导致数据全空
+  useEffect(() => {
+    if (!stores || !Array.isArray(stores)) return;
+    if (currentStoreId === 'all' || !currentStoreId) return;
+    const exists = stores.some((s) => s.id === currentStoreId);
+    if (!exists) {
+      setCurrentStoreId('all');
+    }
+  }, [stores, currentStoreId]);
+
   const currentStore = useMemo(() => {
     if (!stores) return null;
     if (currentStoreId === 'all') return { id: 'all', name: '全部店铺', site: '', currency: 'USD' };

@@ -72,11 +72,11 @@ export function computeTotalExpense(profit) {
 
 // ============== 交易明细汇总 ==============
 
-/** 按月份聚合交易明细，返回资金状态/类型汇总 */
-export async function getTransactionSummaryByMonth(month) {
-  let collection = db.transactions;
-  if (month) collection = collection.where('month').equals(month);
-  const rows = await collection.toArray();
+/** 按月份聚合交易明细，返回资金状态/类型汇总（可按店铺过滤） */
+export async function getTransactionSummaryByMonth(month, storeId) {
+  let rows = await db.transactions.toArray();
+  if (month) rows = rows.filter((r) => String(r.month) === String(month));
+  if (storeId && storeId !== 'all') rows = rows.filter((r) => matchesStoreId(r, storeId));
   const summary = {
     total: rows.length,
     disbursedCount: 0,

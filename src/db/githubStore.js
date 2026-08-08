@@ -26,6 +26,23 @@ try {
 
 export const githubFallback = { active: false };
 
+// 本地缓存写入失败状态（供 UI 显示警告，避免"导入成功但刷新即丢"）
+export const localCacheState = { error: null };
+
+// 数据库写入序列号：每次内存/缓存写入 +1，用于上传竞态检测（详见 flushPending）
+let dbWriteSeq = 0;
+export function bumpDbWriteSeq() { dbWriteSeq++; }
+export function getDbWriteSeq() { return dbWriteSeq; }
+
+// 本地缓存写入失败时通知页面（顶栏/数据导入页显示警告横幅）
+function reportCacheError(err, op) {
+  const msg = String(err?.message || err?.name || err || '未知错误');
+  localCacheState.error = `本地数据保存失败（${op}）：${msg}。浏览器存储空间可能已满，刷新页面将丢失最近数据，请先清理浏览器缓存或减少数据量。`;
+  try {
+    window.dispatchEvent(new CustomEvent('amz-local-cache-error', { detail: localCacheState.error }));
+  } catch (e) { /* ignore */ }
+}
+
 /**
  * 获取 GitHub 云端配置
  * @returns {{owner:string, repo:string, branch:string, token:string}|null}
@@ -35,16 +52,32 @@ export function getGithubConfig() {
 }
 
 /**
- * 保存 GitHub 云端配置（写 localStorage + 重置缓存状态）
+ * 保存 GitHub 云端配置（写 localStorage）
+ * 注意：不再清空本地数据缓存（amz_gh_db）—— 缓存里的业务数据与仓库无关，清空会导致
+ * 首次同步把空库推上云、覆盖云端已有数据（曾导致数据丢失）。仅重置离线降级标记。
  */
 export function saveGithubConfig(cfg) {
   currentConfig = { owner: '', repo: '', branch: 'main', token: '', ...(cfg || {}) };
   try {
     localStorage.setItem(CONFIG_KEY, JSON.stringify(currentConfig));
-  } catch (e) { /* ignore */ }
-  // 配置变化后，云端数据缓存可能不属于新仓库，需要重置
-  clearLocalDbCache();
+  } catch (e) {
+    reportCacheError(e, '保存云端配置');
+  }
   githubFallback.active = false;
+}
+
+/**
+ * 仅用于「测试连接」：用临时配置探测连通性，不改动已保存配置、不清任何缓存
+ * @returns {Promise<{status:string, detail:string}>}
+ */
+export async function testGithubConnection(owner, repo, branch, token) {
+  const prevConfig = currentConfig;
+  currentConfig = { owner, repo, branch: branch || 'main', token };
+  try {
+    return await checkGithubStatus();
+  } finally {
+    currentConfig = prevConfig;
+  }
 }
 
 /**
@@ -97,7 +130,13 @@ function readLocalCache() {
 function writeLocalCache(dbObj) {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(dbObj));
-  } catch (e) { /* ignore */ }
+    // 写入成功时清除历史告警（仅当错误源于配额类失败时清除，避免误报反复）
+    if (localCacheState.error && localCacheState.error.includes('存储空间')) {
+      localCacheState.error = null;
+    }
+  } catch (e) {
+    reportCacheError(e, '写入本地缓存');
+  }
 }
 
 function readLocalSha() {
@@ -111,7 +150,9 @@ function readLocalSha() {
 function writeLocalSha(sha) {
   try {
     localStorage.setItem(SHA_KEY, sha || '');
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    reportCacheError(e, '写入同步标记');
+  }
 }
 
 // ============== 脏表标记（待同步） ==============
@@ -130,7 +171,9 @@ function readDirty() {
 function writeDirty(list) {
   try {
     localStorage.setItem(DIRTY_KEY, JSON.stringify(list));
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    reportCacheError(e, '写入待同步标记');
+  }
 }
 
 /**
@@ -370,12 +413,14 @@ function mergeLocalDirty(cloudDb) {
 /**
  * 尝试把脏表推送到云端（基于云端最新数据合并后整体上传，成功则清空脏表）
  * @param {Object} [localDb] 可选：直接传入当前内存 db（用于导入后立即上传）
- * @returns {Promise<{ok:boolean, message?:string}>}
+ * @returns {Promise<{ok:boolean, message?:string, raced?:boolean}>}
  */
 export async function flushPending(localDb = null) {
   const dirty = readDirty();
   if (!dirty.length) return { ok: true };
   if (!hasGithubConfig()) return { ok: false, message: '未配置 GitHub 云端' };
+  // 记录上传开始时的写入序列号，用于检测上传期间是否有新写入（防竞态覆盖）
+  const startSeq = getDbWriteSeq();
   // 拉取云端最新数据
   const cloud = await fetchCloudDb();
   if (!cloud) return { ok: false, message: '云端暂不可达，稍后自动重试' };
@@ -386,6 +431,11 @@ export async function flushPending(localDb = null) {
   const res = await pushCloudDb(merged);
   if (res.ok) {
     writeLocalSha(res.sha);
+    // 上传期间有新写入：不能用旧快照覆盖本地缓存，且脏标记必须保留，
+    // 否则新数据 B 只在内存里，刷新即丢（云端也未收到 B）
+    if (getDbWriteSeq() !== startSeq) {
+      return { ok: true, raced: true, message: '上传期间有新数据写入，已保留待同步，稍后自动补传' };
+    }
     writeLocalCache(merged);
     clearDirty();
     return { ok: true };

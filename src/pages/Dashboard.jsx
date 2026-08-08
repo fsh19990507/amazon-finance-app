@@ -44,7 +44,9 @@ export default function Dashboard() {
   const colors = chartColorsFor(themeId);
 
   const [dimension, setDimension] = useState('month');
-  const [customRange, setCustomRange] = useState(['2026-01', '2026-12']);
+  // 自定义时间维度默认范围为当前自然年（避免硬编码导致跨年后默认范围错误）
+  const currentYear = new Date().getFullYear();
+  const [customRange, setCustomRange] = useState([`${currentYear}-01`, `${currentYear}-12`]);
   const [activeMonth, setActiveMonth] = useState(null);
   const [series, setSeries] = useState([]);
   const [allTxs, setAllTxs] = useState([]);
@@ -53,8 +55,8 @@ export default function Dashboard() {
 
   const profitReports = useLiveQuery(() => db.profitReports.toArray(), [], []);
   const txSummary = useLiveQuery(
-    () => getTransactionSummaryByMonth(activeMonth),
-    [activeMonth],
+    () => getTransactionSummaryByMonth(activeMonth, currentStoreId),
+    [activeMonth, currentStoreId],
     null
   );
 

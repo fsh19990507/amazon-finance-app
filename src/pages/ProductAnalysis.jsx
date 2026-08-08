@@ -8,6 +8,7 @@ import {
   SaveOutlined, StarOutlined, DownOutlined, DeleteOutlined,
   BarChartOutlined, PieChartOutlined, ExclamationCircleOutlined
 } from '@ant-design/icons';
+import { useLocation } from 'react-router-dom';
 import { useLiveQuery } from '../hooks/useLiveQuery.js';
 import * as XLSX from 'xlsx';
 import dayjs from 'dayjs';
@@ -67,8 +68,14 @@ export default function ProductAnalysis() {
   // 主题图表配色：随主题联动
   const { themeId } = useTheme();
   const colors = chartColorsFor(themeId);
+  const location = useLocation();
 
-  const [keyword, setKeyword] = useState('');
+  // 支持从 URL 读取搜索关键词（全局搜索 Ctrl+K 跳转）
+  const [keyword, setKeyword] = useState(() => {
+    try {
+      return new URLSearchParams(location.search).get('keyword') || '';
+    } catch (e) { return ''; }
+  });
   const [filterMonth, setFilterMonth] = useState('all');
   const [quickDate, setQuickDate] = useState('all');
   const [customDateRange, setCustomDateRange] = useState(null);
@@ -309,6 +316,11 @@ export default function ProductAnalysis() {
   }, [pieChart.chart, pieOption]);
 
   const handleExport = () => {
+    // 权限校验：导出需普通用户及以上（Lv.2+）
+    if (!can(PERM.EXPORT_EXCEL)) {
+      message.error('只读用户无导出权限');
+      return;
+    }
     if (!productRows.length) {
       message.warning('无数据可导出');
       return;

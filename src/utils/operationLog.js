@@ -38,12 +38,13 @@ export async function writeLog({ accountId, action, targetType, targetId, amount
 }
 
 export async function getLogs({ limit = 100, accountId, action } = {}) {
-  let coll = db.operationLogs.orderBy('createdAt').reverse();
-  const rows = await coll.limit(limit).toArray();
-  let result = rows;
-  if (accountId) result = result.filter((r) => r.accountId === accountId);
-  if (action) result = result.filter((r) => r.action === action);
-  return result;
+  // 先按条件过滤再截断，避免「先 limit 后过滤」导致更早的匹配日志被截断查不到
+  let rows = await db.operationLogs.toArray();
+  if (accountId) rows = rows.filter((r) => r.accountId === accountId);
+  if (action) rows = rows.filter((r) => r.action === action);
+  return rows
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    .slice(0, limit);
 }
 
 export const actionLabels = {

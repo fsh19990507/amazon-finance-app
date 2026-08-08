@@ -20,6 +20,7 @@ import { StoreProvider, useStore } from './context/StoreContext.jsx';
 import { RateProvider, useRate } from './context/RateContext.jsx';
 import { permLevelName } from './utils/permissions.js';
 import { subscribeCloudStatus } from './db/database.js';
+import { localCacheState } from './db/githubStore.js';
 
 import Login from './pages/Login.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
@@ -177,10 +178,11 @@ function GlobalSearch() {
     const kw = keyword.trim();
     if (!kw) return;
     // 简单规则：订单号（长且带横杠）→ 交易明细；其余 → 商品分析
+    // 统一用 keyword 参数名（目标页面按此读取）
     if (/^\d{3}-\d{7}-\d{7}$/.test(kw) || kw.length > 10 && /[A-Z0-9-]/.test(kw)) {
-      navigate(`/transactions?search=${encodeURIComponent(kw)}`);
+      navigate(`/transactions?keyword=${encodeURIComponent(kw)}`);
     } else {
-      navigate(`/product?search=${encodeURIComponent(kw)}`);
+      navigate(`/product?keyword=${encodeURIComponent(kw)}`);
     }
     setOpen(false);
     setKeyword('');
@@ -266,6 +268,14 @@ function AppLayout() {
       setCloudOffline(result.status !== 'online');
     });
     return unsubscribe;
+  }, []);
+
+  // 本地缓存写入失败告警（存储空间不足时数据无法持久化，刷新会丢失）
+  const [cacheError, setCacheError] = useState(() => localCacheState?.error || null);
+  useEffect(() => {
+    const handler = (e) => setCacheError(e?.detail || '本地数据保存失败');
+    window.addEventListener('amz-local-cache-error', handler);
+    return () => window.removeEventListener('amz-local-cache-error', handler);
   }, []);
 
   // 响应式：监听窗口宽度，<768px 视为手机
@@ -387,6 +397,20 @@ function AppLayout() {
             showIcon
             icon={<DisconnectOutlined />}
             message="云端暂不可用，数据来自本地缓存；网络恢复后自动同步。可到「设置 → 云端同步」配置 GitHub 免费云端"
+            style={{ borderRadius: 0 }}
+          />
+        )}
+
+        {/* 本地缓存写入失败告警（存储空间不足时刷新会丢数据） */}
+        {cacheError && (
+          <Alert
+            banner
+            type="error"
+            showIcon
+            icon={<ExclamationCircleOutlined />}
+            message={cacheError}
+            closable
+            onClose={() => { setCacheError(null); localCacheState.error = null; }}
             style={{ borderRadius: 0 }}
           />
         )}

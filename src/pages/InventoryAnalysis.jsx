@@ -19,6 +19,8 @@ import { useLiveQuery } from '../hooks/useLiveQuery.js';
 import db from '../db/database.js';
 import { useECharts, chartColorsFor } from '../utils/useECharts.js';
 import { useTheme } from '../context/ThemeContext.jsx';
+import { useStore } from '../context/StoreContext.jsx';
+import { matchesStoreId } from '../utils/dataAggregator.js';
 import { formatMoney } from '../utils/parsers.js';
 
 const { Title } = Typography;
@@ -26,9 +28,16 @@ const { Title } = Typography;
 export default function InventoryAnalysis() {
   const { themeId } = useTheme();
   const colors = chartColorsFor(themeId);
+  const { currentStoreId } = useStore();
 
-  // 加载全部库存报告数据（空数组为加载中默认值）
-  const data = useLiveQuery(() => db.inventoryRecords.toArray(), [], []);
+  // 加载库存报告数据（按当前选中店铺过滤；「全部店铺」时不限制）
+  const data = useLiveQuery(
+    () => db.inventoryRecords.toArray().then((rows) =>
+      !currentStoreId || currentStoreId === 'all' ? rows : rows.filter((r) => matchesStoreId(r, currentStoreId))
+    ),
+    [currentStoreId],
+    []
+  );
 
   // ===== KPI 计算 =====
   const kpis = useMemo(() => {

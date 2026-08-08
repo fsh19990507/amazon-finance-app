@@ -278,6 +278,11 @@ export default function ExpenseAnalysis() {
   };
 
   const handleExport = () => {
+    // 权限校验：导出需普通用户及以上（Lv.2+）
+    if (!can(PERM.EXPORT_EXCEL)) {
+      message.error('只读用户无导出权限');
+      return;
+    }
     if (!expenseItems.length) {
       message.warning('无数据可导出');
       return;

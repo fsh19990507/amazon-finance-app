@@ -93,6 +93,12 @@ export default function Login() {
       if (!acc) return;
       const newHash = hashPassword(values.newPassword);
       await db.accounts.update(acc.id, { passwordHash: newHash, mustChangePassword: false });
+      // 防御：校验修改是否真正生效（本地缓存无该账户行时 update 会静默跳过）
+      const after = await db.accounts.get(acc.id);
+      if (!after || after.passwordHash !== newHash) {
+        message.error('密码修改未生效：本地账户数据异常，请到「设置 → 云端同步」确认配置后重试');
+        return;
+      }
       message.success('密码修改成功');
       setShowChangePwd(false);
     } catch (err) {

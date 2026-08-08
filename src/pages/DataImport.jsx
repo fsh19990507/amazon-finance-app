@@ -52,6 +52,11 @@ export default function DataImport() {
   //       顶栏为「全部店铺」时回退到第一个店铺，避免数据无归属
   const assignStoreToRows = async (rows, fileType) => {
     if (!rows || !rows.length) return rows;
+    // 给行补写去重键店铺后缀（dedupKey 原不含店铺，跨店铺同 SKU 会被误判重复跳过）
+    const withStoreSuffix = (row) => {
+      if (row.dedupKey) row.dedupKey = `${row.dedupKey}|${row.storeId}`;
+      return row;
+    };
     const targetStoreId = currentStoreId && currentStoreId !== 'all'
       ? currentStoreId
       : (stores && stores.length ? stores[0].id : 'default');
@@ -61,11 +66,15 @@ export default function DataImport() {
       for (const row of rows) {
         const matched = row.store && nameToId.get(String(row.store).trim());
         row.storeId = matched || targetStoreId;
+        withStoreSuffix(row);
       }
       return rows;
     }
     // 其余 5 类报表（交易明细/结算/业务/广告/库存）：无店铺列，统一归入目标店铺
-    for (const row of rows) row.storeId = targetStoreId;
+    for (const row of rows) {
+      row.storeId = targetStoreId;
+      withStoreSuffix(row);
+    }
     return rows;
   };
 
@@ -98,6 +107,12 @@ export default function DataImport() {
       let duplicateCount = 0;
       const errorCount = 0;
 
+      // 先补写店铺归属（storeId + dedupKey 店铺后缀），再按该键去重，
+      // 保证与存量数据（迁移 v2 后均带后缀）格式一致，避免重复导入
+      if (rows && rows.length) {
+        await assignStoreToRows(rows, fileType);
+      }
+
       // 读取该表已有记录的 dedupKey 集合，仅入库新行（同文件内重复行也跳过）
       let existingKeys = new Set();
       try {
@@ -113,9 +128,8 @@ export default function DataImport() {
         if (existingKeys.has(row.dedupKey)) duplicateCount++;
         else newRows.push(row);
       }
-      // 补写店铺归属（storeId）后再入库，保证各分析页能按店铺正确过滤
+      // 入库（店铺归属已在上面补写完成）
       if (newRows.length) {
-        await assignStoreToRows(newRows, fileType);
         await config.table.bulkAdd(newRows);
       }
       successCount = newRows.length;
@@ -184,6 +198,10 @@ export default function DataImport() {
     if (ok.length) {
       message.success(`批量导入完成：${ok.length} 个文件，成功 ${successCount} 条，重复 ${duplicateCount} 条`);
     }
+    // 空文件告警：成功 0 条且解析 0 行，提示用户检查文件内容
+    if (ok.some((r) => !r.error && !r.successCount && (!r.totalParsed || r.totalParsed === 0))) {
+      message.warning('有文件解析出 0 条数据（文件内无数据或表头格式不匹配），请在报告中查看明细');
+    }
     if (failed.length) {
       message.warning(`${failed.length} 个文件导入失败，详见导入报告`);
     }
@@ -202,6 +220,11 @@ export default function DataImport() {
 
   // 拖入/选择文件入口：加入队列并启动批量处理
   const handleBeforeUpload = (file, fileList) => {
+    // 权限校验：导入数据需普通用户及以上（Lv.2+），只读用户（Lv.1）不可写库
+    if (!can(PERM.IMPORT_DATA)) {
+      message.error('只读用户无导入权限，请使用可写账号登录');
+      return false;
+    }
     // 选择多个文件时，只用最后一个文件触发一次入队，避免重复
     if (fileList && fileList.length > 1 && fileList[fileList.length - 1] !== file) {
       return false;

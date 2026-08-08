@@ -8,7 +8,7 @@
 //   + where(f).equals(v)/first + orderBy(f).reverse().limit(n) 链式查询
 import { githubFallback, getGithubConfig, hasGithubConfig, checkGithubStatus,
   subscribeGithubStatus, readCachedDb, cacheDb, refreshFromCloud,
-  markTableDirty, flushPending, pushFullDb, createEmptyDb } from './githubStore.js';
+  markTableDirty, flushPending, pushFullDb, createEmptyDb, bumpDbWriteSeq } from './githubStore.js';
 
 // ============== 导出兼容（旧版 checkCloudStatus 语义保留） ==============
 
@@ -100,6 +100,8 @@ function setTableRows(tableName, rows, enqueue = true) {
   dbObj.tables[tableName] = rows;
   dbObj.updatedAt = new Date().toISOString();
   cacheDb(dbObj);
+  // 递增写入序列号（flushPending 据此检测上传期间的并发写入，避免旧快照覆盖新数据）
+  bumpDbWriteSeq();
   if (enqueue) {
     // 标记该表有改动（上传时合并覆盖云端该表）
     markTableDirty(tableName);
@@ -119,11 +121,38 @@ function scheduleUpload() {
   if (_uploadTimer) clearTimeout(_uploadTimer);
   _uploadTimer = setTimeout(() => {
     _uploadTimer = null;
-    if (_uploadRunning) return;
-    _uploadRunning = true;
-    flushPending(getMemoryDb()).finally(() => { _uploadRunning = false; });
+    if (_uploadRunning) {
+      // 上一轮上传还没结束：先标记待重传，结束后立即补跑，避免写入被丢弃
+      _pendingUpload = true;
+      return;
+    }
+    runUpload();
   }, 2000);
 }
+
+// 上传期间又有新写入时置 true，待当前上传结束后立即补传
+let _pendingUpload = false;
+function runUpload() {
+  _uploadRunning = true;
+  flushPending(getMemoryDb()).finally(() => {
+    _uploadRunning = false;
+    if (_pendingUpload) {
+      _pendingUpload = false;
+      scheduleUpload();
+    }
+  });
+}
+
+// 网络恢复后自动补传离线期间的待同步数据
+function setupOnlineResync() {
+  if (typeof window === 'undefined') return;
+  window.addEventListener('online', () => {
+    if (!hasGithubConfig()) return;
+    if (_uploadRunning) { _pendingUpload = true; return; }
+    scheduleUpload();
+  });
+}
+setupOnlineResync();
 
 /**
  * 根据现有行生成自增数字 id（与旧 Supabase 数字 id 兼容）
@@ -163,6 +192,19 @@ export function startCloudSync() {
       }
     });
   });
+}
+
+/**
+ * 手动从云端拉取并应用到内存 + UI（与 startCloudSync 的静默拉取不同，本次立即生效）
+ * @returns {Promise<{changed:boolean, db:Object|null}>}
+ */
+export async function pullFromCloud() {
+  const res = await refreshFromCloud();
+  if (res.changed && res.db) {
+    memoryDb = res.db;
+    notifyDbChanged();
+  }
+  return res;
 }
 
 // ============== 链式查询 ==============
@@ -417,36 +459,55 @@ const db = {
    * 旧版本导入的数据没有 storeId，导致按店铺过滤时全部不可见。
    * 规则：利润报表优先按 Excel「店铺」名称匹配 stores 表；
    *       匹配不到或无名称列的表（交易/结算/业务/广告/库存）统一归入默认店铺。
-   * 用 localStorage 标记 amz_store_migrated 防止重复执行。
+   * v2：同时给所有存量行统一补写 dedupKey 店铺后缀（|storeId），
+   *     保证与新导入数据格式一致，避免重复导入被误判为新数据。
+   * 用 localStorage 标记 amz_store_migrated_v2 防止重复执行。
    */
   async migrateStoreIds() {
     try {
-      if (localStorage.getItem('amz_store_migrated')) return;
+      if (localStorage.getItem('amz_store_migrated_v2')) return;
       const stores = await this.stores.toArray();
       const nameToId = new Map(stores.map((s) => [String(s.name || '').trim(), s.id]));
+      // 给行补写去重键店铺后缀（dedupKey 原不含店铺），已带后缀则跳过
+      const withStoreSuffix = (row) => {
+        if (row.dedupKey && !row.dedupKey.endsWith(`|${row.storeId}`)) {
+          row.dedupKey = `${row.dedupKey}|${row.storeId}`;
+        }
+        return row;
+      };
 
       // 利润报表：按店铺名称匹配
       const profits = await this.profitReports.toArray();
       let profitChanged = false;
       for (const p of profits) {
-        if (p.storeId) continue;
-        const matched = p.store && nameToId.get(String(p.store).trim());
-        p.storeId = matched || 'default';
-        profitChanged = true;
+        if (!p.storeId) {
+          const matched = p.store && nameToId.get(String(p.store).trim());
+          p.storeId = matched || 'default';
+        }
+        if (!p.dedupKey || !p.dedupKey.endsWith(`|${p.storeId}`)) {
+          withStoreSuffix(p);
+          profitChanged = true;
+        }
       }
       if (profitChanged) await this.profitReports.bulkPut(profits);
 
-      // 交易/结算/业务/广告/库存：无名称列，统一归入默认店铺
+      // 交易/结算/业务/广告/库存：无名称列，统一归入默认店铺；存量有 storeId 的行仅补 dedupKey 后缀
       for (const t of ['transactions', 'settlements', 'business_reports', 'ad_reports', 'inventory_records']) {
         const rows = await this[t].toArray();
-        const needFix = rows.filter((r) => !r.storeId);
-        if (!needFix.length) continue;
-        for (const r of needFix) r.storeId = 'default';
-        await this[t].bulkPut(rows);
+        let changed = false;
+        for (const r of rows) {
+          if (!r.storeId) r.storeId = 'default';
+          if (r.dedupKey && !r.dedupKey.endsWith(`|${r.storeId}`)) {
+            withStoreSuffix(r);
+            changed = true;
+          }
+        }
+        if (changed) await this[t].bulkPut(rows);
       }
 
-      localStorage.setItem('amz_store_migrated', '1');
-      console.log('[数据迁移] 店铺归属迁移完成');
+      localStorage.setItem('amz_store_migrated_v2', '1');
+      localStorage.removeItem('amz_store_migrated'); // 清理旧标记
+      console.log('[数据迁移] 店铺归属迁移 v2 完成');
     } catch (e) {
       // 迁移失败不阻塞启动，下次启动会重试
       console.warn('[数据迁移] 店铺归属迁移失败:', e?.message || e);

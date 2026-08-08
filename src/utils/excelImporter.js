@@ -305,12 +305,22 @@ const NUMBER_FIELDS = new Set([
 /**
  * 从二维数组提取利润报表记录
  * 第2行为子字段名，第3行起为数据，跳过"汇总"行
+ * 防御：若第2行不是有效子字段表头（如单行表头旧格式/纯数据），直接抛错，
+ *       避免所有字段解析为 0 产生静默脏数据
  */
 export function extractProfitRows(matrix) {
   if (!matrix || matrix.length < 3) return [];
 
   // 第1行大类 + 第2行子字段
   const headerRow = matrix[1].map((c) => String(c ?? '').trim());
+
+  // 校验第2行是否为利润报表子字段表头：
+  // 至少命中一个关键字段（时间/店铺/亚马逊回款/毛利润等），否则判为旧格式/无表头
+  const criticalFields = ['时间', '店铺', '亚马逊回款', '毛利润', 'FBA销售额', '销售佣金'];
+  const headerHit = headerRow.filter((h) => criticalFields.includes(h)).length;
+  if (headerHit === 0) {
+    throw new Error('利润报表表头格式异常：第 2 行未找到子字段（时间/店铺/亚马逊回款等）。请确认是「亚马逊后台下载的双行表头利润报表」，旧版单行表头不支持');
+  }
 
   // 构建子字段名 → 列索引（首次出现位置）
   const colIndex = {};
@@ -364,7 +374,16 @@ export function extractProfitRows(matrix) {
  * @returns {Promise<{fileType: string, sheetName: string, rows: any[], headerPreview: any[]}>}
  */
 export async function parseExcelFile(file) {
-  const { matrix, sheetName } = await parseWorkbook(file);
+  let matrix = [];
+  let sheetName = '';
+  try {
+    const parsed = await parseWorkbook(file);
+    matrix = parsed.matrix;
+    sheetName = parsed.sheetName;
+  } catch (e) {
+    // 文件损坏/加密/无法解析：给出友好中文提示
+    throw new Error(`文件无法解析（可能已损坏、被加密或不是 Excel 文件）：${e?.message || e}. 请确认文件完整后重试`);
+  }
   const fileType = identifyFileType(matrix);
   let rows = [];
   try {
