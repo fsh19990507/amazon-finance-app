@@ -1,0 +1,3 @@
+approval-date,reimbursement-id,case-id,amazon-order-id,sku,fnsku,asin,product-name,condition,currency-unit,amount-total,quantity-reimbursed-cash,quantity-reimbursed-inventory,reimbursement-type
+2026-06-10,REIMB-001,CASE-001,111-2222-3333,SKU-003,FNSKU-003,B01TEST03,测试商品三,New,USD,25.50,1,0,Cash
+2026-06-12,REIMB-002,CASE-002,111-2222-4444,SKU-001,FNSKU-001,B01TEST01,测试商品一,New,USD,48.00,2,0,Cash

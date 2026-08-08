@@ -1,6 +1,26 @@
+# 依赖与构建产物
 node_modules
-gh-pages-temp
+dist
+dist-ssr
+*.local
+
+# 系统文件
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# GitHub Pages 部署临时目录（独立仓库，勿提交主分支）
+gh-pages-temp/
+
+# 日志 / 用户数据文件
 *.log
 *.xlsx
-*.json
-!package.json
+
+# 调试与验证临时产物
+debug_*.py
+debug_*.mjs
+debug_*.png
+test_shot_*.png
+test-screenshots/
+profit_b64.txt

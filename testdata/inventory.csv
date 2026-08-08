@@ -1,0 +1,5 @@
+sku,fnsku,asin,product-name,condition,quantity-available,quantity-reserved,quantity-inbound
+SKU-001,FNSKU-001,B01TEST01,测试商品一,New,120,10,30
+SKU-002,FNSKU-002,B01TEST02,测试商品二,New,85,5,20
+SKU-003,FNSKU-003,B01TEST03,测试商品三,New,45,8,15
+SKU-004,FNSKU-004,B01TEST04,测试商品四,Used,20,2,0

@@ -1,0 +1,10 @@
+Date,Campaign Name,Campaign ID,Ad Group Name,Targeting,Keyword,Match Type,Impressions,Clicks,CTR,Spend,7 Day Total Sales,Total ACoS,Total ROAS,Orders,Units,Currency
+2026-06-01,自动广告,123456001,默认广告组,Auto,Auto targeting,Broad,12000,240,2.00%,150.50,320.00,47.03%,2.13,8,9,USD
+2026-06-02,自动广告,123456001,默认广告组,Auto,Auto targeting,Broad,11800,230,1.95%,145.20,310.00,46.84%,2.14,7,8,USD
+2026-06-03,自动广告,123456001,默认广告组,Auto,Auto targeting,Broad,12500,250,2.00%,160.00,350.00,45.71%,2.19,9,10,USD
+2026-06-01,精准广告,123456002,关键词组,Broad,wireless charger,Broad,5000,150,3.00%,80.00,240.00,33.33%,3.00,6,6,USD
+2026-06-02,精准广告,123456002,关键词组,Broad,wireless charger,Broad,5200,160,3.08%,85.00,260.00,32.69%,3.06,7,7,USD
+2026-06-03,精准广告,123456002,关键词组,Broad,wireless charger,Broad,4800,145,3.02%,78.00,230.00,33.91%,2.95,5,5,USD
+2026-06-01,品牌广告,123456003,品牌词组,Exact,phone stand,Exact,3000,90,3.00%,45.00,120.00,37.50%,2.67,3,3,USD
+2026-06-02,品牌广告,123456003,品牌词组,Exact,phone stand,Exact,3200,95,2.97%,48.00,130.00,36.92%,2.71,3,4,USD
+2026-06-03,品牌广告,123456003,品牌词组,Exact,phone stand,Exact,2900,85,2.93%,42.00,110.00,38.18%,2.62,2,2,USD

@@ -1,0 +1,3 @@
+sku,asin,product-name,qty,stranded-reason
+SKU-002,B01TEST02,测试商品二,5,No listing
+SKU-005,B01TEST05,测试商品五,12,Listing suppressed
