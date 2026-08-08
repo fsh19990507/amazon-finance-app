@@ -285,43 +285,53 @@ export async function fetchCloudDb() {
 
 /**
  * 将整个 db 对象写回 GitHub（PUT Contents API，sha 乐观锁）
+ * 409 冲突时自动重试：重新拉取最新 sha 后再 PUT（最多 2 次），避免并发写入互相冲突
  * @returns {Promise<{ok:boolean, sha?:string, message?:string}>}
  */
 export async function pushCloudDb(dbObj) {
   if (!hasGithubConfig()) return { ok: false, message: '未配置 GitHub 云端' };
-  // 先拿当前 sha（防止覆盖他人改动）
-  const current = await fetchCloudDb();
-  const baseSha = current?.sha || '';
-  const content = utf8ToBase64(JSON.stringify(dbObj, null, 2));
-  const body = {
-    message: `数据更新 ${new Date().toLocaleString('zh-CN')}`,
-    content,
-    branch: currentConfig.branch
-  };
-  if (baseSha) body.sha = baseSha;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
-  try {
-    const url = `https://api.github.com/repos/${currentConfig.owner}/${currentConfig.repo}/contents/${DB_PATH}`;
-    const res = await fetch(url, {
-      method: 'PUT',
-      headers: ghHeaders(),
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-    clearTimeout(timer);
-    if (!res.ok) {
-      let detail = `GitHub 返回 ${res.status}`;
-      if (res.status === 409) detail = '云端数据刚被其他设备修改（冲突），请稍后重试或手动刷新';
-      if (res.status === 401 || res.status === 403) detail = 'Token 无效或无权限';
-      return { ok: false, message: detail };
+  // 409 冲突时重试最多 2 次（重新拿 sha）
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // 先拿当前 sha（防止覆盖他人改动）
+    const current = await fetchCloudDb();
+    const baseSha = current?.sha || '';
+    const content = utf8ToBase64(JSON.stringify(dbObj, null, 2));
+    const body = {
+      message: `数据更新 ${new Date().toLocaleString('zh-CN')}`,
+      content,
+      branch: currentConfig.branch
+    };
+    if (baseSha) body.sha = baseSha;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const url = `https://api.github.com/repos/${currentConfig.owner}/${currentConfig.repo}/contents/${DB_PATH}`;
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: ghHeaders(),
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (res.status === 409 && attempt < 2) {
+        // 云端数据刚被其他设备/并发写入修改，重试前稍等并重新拉取 sha
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        continue;
+      }
+      if (!res.ok) {
+        let detail = `GitHub 返回 ${res.status}`;
+        if (res.status === 409) detail = '云端数据刚被其他设备修改（冲突），已重试仍失败，请稍后手动点「推送到云端」';
+        if (res.status === 401 || res.status === 403) detail = 'Token 无效或无权限';
+        return { ok: false, message: detail };
+      }
+      const meta = await res.json();
+      return { ok: true, sha: meta?.content?.sha || '' };
+    } catch (e) {
+      clearTimeout(timer);
+      return { ok: false, message: String(e?.message || '网络异常') };
     }
-    const meta = await res.json();
-    return { ok: true, sha: meta?.content?.sha || '' };
-  } catch (e) {
-    clearTimeout(timer);
-    return { ok: false, message: String(e?.message || '网络异常') };
   }
+  return { ok: false, message: '云端数据冲突，重试失败' };
 }
 
 // ============== 云端状态 / 缓存管理（供 database.js 使用） ==============

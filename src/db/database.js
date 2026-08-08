@@ -155,6 +155,26 @@ function setupOnlineResync() {
 setupOnlineResync();
 
 /**
+ * 串行化一次云端上传（与 scheduleUpload 共用同一把锁 _uploadRunning，
+ * 避免 startCloudSync 的 flushPending 与 2 秒定时上传并发 PUT 导致 409 冲突）
+ */
+function enqueueUploadOnce() {
+  if (!hasGithubConfig()) return Promise.resolve();
+  if (_uploadRunning) {
+    _pendingUpload = true;
+    return Promise.resolve();
+  }
+  _uploadRunning = true;
+  return flushPending(getMemoryDb()).finally(() => {
+    _uploadRunning = false;
+    if (_pendingUpload) {
+      _pendingUpload = false;
+      scheduleUpload();
+    }
+  });
+}
+
+/**
  * 根据现有行生成自增数字 id（与旧 Supabase 数字 id 兼容）
  */
 function nextId(tableName) {
@@ -179,9 +199,9 @@ export function startCloudSync() {
       memoryDb = res.db;
       notifyDbChanged();
     }
-    // 随后尝试补传待同步队列
-    flushPending().then((r) => {
-      if (r.ok) {
+    // 随后尝试补传待同步队列（走串行上传队列，避免与定时上传并发 PUT 导致 409）
+    enqueueUploadOnce().then((r) => {
+      if (r && r.ok) {
         // 补传成功：刷新内存数据并通知
         refreshFromCloud().then((r2) => {
           if (r2.changed && r2.db) {
@@ -492,8 +512,16 @@ const db = {
       if (profitChanged) await this.profitReports.bulkPut(profits);
 
       // 交易/结算/业务/广告/库存：无名称列，统一归入默认店铺；存量有 storeId 的行仅补 dedupKey 后缀
-      for (const t of ['transactions', 'settlements', 'business_reports', 'ad_reports', 'inventory_records']) {
-        const rows = await this[t].toArray();
+      // 注意：db 表属性是 camelCase（businessReports/adReports/inventoryRecords），不能用 snake_case 字符串索引
+      const migrateTables = [
+        this.transactions,
+        this.settlements,
+        this.businessReports,
+        this.adReports,
+        this.inventoryRecords
+      ];
+      for (const table of migrateTables) {
+        const rows = await table.toArray();
         let changed = false;
         for (const r of rows) {
           if (!r.storeId) r.storeId = 'default';
@@ -502,7 +530,7 @@ const db = {
             changed = true;
           }
         }
-        if (changed) await this[t].bulkPut(rows);
+        if (changed) await table.bulkPut(rows);
       }
 
       localStorage.setItem('amz_store_migrated_v2', '1');
