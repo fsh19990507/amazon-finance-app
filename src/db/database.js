@@ -560,7 +560,7 @@ export default db;
 
 const ROLE_DEFAULTS = [
   { level: 4, name: '管理员', description: '全部权限' },
-  { level: 3, name: '高级用户', description: '批量删除、导出PDF、视图管理' },
+  { level: 3, name: '高级用户', description: '批量删除、管理全部视图、查看操作日志' },
   { level: 2, name: '普通用户', description: '导入数据、单条删除、导出Excel' },
   { level: 1, name: '只读用户', description: '仅查看数据' }
 ];

@@ -74,7 +74,7 @@ export default function Settings() {
   );
 }
 
-// ============= 外观主题（5 套主题一键切换） =============
+// ============= 外观主题（多套主题一键切换，数量随 themes.js 扩展） =============
 function ThemeSettings() {
   const { themes, themeId, setTheme } = useTheme();
 
@@ -176,6 +176,8 @@ function AccountManager() {
   };
 
   const handleSave = async (values) => {
+    // 函数内二次校验（按钮 disabled 之外的最后防线，防 devtools 改 disabled 绕过）
+    if (!canManage) { message.error('需要管理员权限'); return; }
     try {
       if (editing) {
         await db.accounts.update(editing.id, {
@@ -230,6 +232,7 @@ function AccountManager() {
   };
 
   const handleDelete = async (acc) => {
+    if (!canManage) { message.error('需要管理员权限'); return; }
     if (acc.id === currentAccount?.id) {
       message.error('不能删除当前登录账户');
       return;
@@ -357,6 +360,8 @@ function RoleManager() {
   };
 
   const handleSave = async () => {
+    // 函数内二次校验（按钮 disabled 之外的最后防线，防 devtools 改 disabled 绕过）
+    if (!canManage) { message.error('需要管理员权限'); return; }
     try {
       await db.roles.put({ level: editingLevel, name: editName, description: editDesc });
       await writeLog({
@@ -432,6 +437,8 @@ function StoreManager() {
   };
 
   const handleSave = async (values) => {
+    // 函数内二次校验（按钮 disabled 之外的最后防线）
+    if (!canManage) { message.error('需要管理员权限'); return; }
     try {
       if (editing) {
         await db.stores.update(editing.id, values);
@@ -465,6 +472,7 @@ function StoreManager() {
   };
 
   const handleDelete = async (s) => {
+    if (!canManage) { message.error('需要管理员权限'); return; }
     if (s.id === 'default') {
       message.error('默认店铺不能删除');
       return;
@@ -604,6 +612,7 @@ function DataManager() {
   const [selectedStore, setSelectedStore] = useState(null);
 
   const handleDeleteByMonth = async () => {
+    if (!can(PERM.DELETE_BY_MONTH)) { message.error('需要高级用户及以上权限'); return; }
     if (!selectedMonth) { message.warning('请选择月份'); return; }
     const txCount = await db.transactions.where('month').equals(selectedMonth).count();
     const prCount = await db.profitReports.where('month').equals(selectedMonth).count();
@@ -635,6 +644,7 @@ function DataManager() {
   };
 
   const handleDeleteByStore = async () => {
+    if (!can(PERM.DELETE_BY_STORE)) { message.error('需要高级用户及以上权限'); return; }
     if (!selectedStore) { message.warning('请选择店铺'); return; }
     if (selectedStore === 'default') {
       Modal.confirm({
@@ -659,6 +669,7 @@ function DataManager() {
   };
 
   const doDeleteStore = async (storeId) => {
+    if (!can(PERM.DELETE_BY_STORE)) { message.error('需要高级用户及以上权限'); return; }
     try {
       // 删除该店铺全部 6 张业务表的数据（交易/利润/结算/业务/广告/库存）
       const delTables = [
@@ -694,6 +705,7 @@ function DataManager() {
   };
 
   const handleDeleteByType = async (type) => {
+    if (!can(PERM.DELETE_BY_TYPE)) { message.error('需要高级用户及以上权限'); return; }
     const typeName = type === 'tx' ? '交易明细' : '利润报表';
     const count = type === 'tx' ? txCount : prCount;
     Modal.confirm({
@@ -723,6 +735,7 @@ function DataManager() {
   };
 
   const handleDeleteAll = async () => {
+    if (!can(PERM.DELETE_ALL)) { message.error('仅管理员可清空全部数据'); return; }
     Modal.confirm({
       title: '清空全部业务数据',
       icon: <ExclamationCircleOutlined />,
@@ -748,6 +761,7 @@ function DataManager() {
   };
 
   const handleFactoryReset = async () => {
+    if (!can(PERM.FACTORY_RESET)) { message.error('仅管理员可工厂重置'); return; }
     Modal.confirm({
       title: '工厂重置（危险！）',
       icon: <ExclamationCircleOutlined style={{ color: 'red' }} />,
@@ -946,7 +960,7 @@ function LogViewer() {
 function CloudSettings() {
   const { can } = useAuth();
   // 云端配置属系统级操作，仅管理员可修改/推送/拉取
-  const canManageCloud = can(PERM.MANAGE_ACCOUNTS);
+  const canManageCloud = can(PERM.MANAGE_CLOUD);
   const [owner, setOwner] = useState('');
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');

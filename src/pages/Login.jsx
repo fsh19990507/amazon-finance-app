@@ -3,12 +3,13 @@ import { Card, Form, Input, Button, Typography, message, Alert, Spin } from 'ant
 import { UserOutlined, LockOutlined, LoginOutlined, ReloadOutlined, CloudSyncOutlined, DisconnectOutlined } from '@ant-design/icons';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useTheme } from '../context/ThemeContext.jsx';
+import { PERM } from '../utils/permissions.js';
 import db, { hashPassword, checkCloudStatus } from '../db/database.js';
 
 const { Title, Text } = Typography;
 
 export default function Login() {
-  const { login, currentAccount } = useAuth();
+  const { login, currentAccount, can } = useAuth();
   // 主题配置：登录页背景/标题颜色随主题联动
   const { themeConfig } = useTheme();
   const [loading, setLoading] = useState(false);
@@ -80,6 +81,11 @@ export default function Login() {
   };
 
   const handleChangePassword = async (values) => {
+    // 权限：改密常量 CHANGE_PASSWORD=1（全员可改自己密码），此处校验保持权限体系一致
+    if (!can(PERM.CHANGE_PASSWORD)) {
+      message.error('当前账户无修改密码权限');
+      return;
+    }
     if (values.newPassword !== values.confirmPassword) {
       message.error('两次输入的密码不一致');
       return;

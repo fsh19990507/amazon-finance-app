@@ -1,4 +1,4 @@
-// 主题上下文 —— 5 套完整主题（经典蓝/深空暗黑/翡翠绿/紫罗兰/暖阳橙）
+// 主题上下文 —— 多套完整主题（数量随 themes.js 扩展，含商务/暗黑/中国风/日式/游戏/动漫等）
 // 每个主题包含 antd token + 组件级 token + 扩展样式 + 图表配色
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import {

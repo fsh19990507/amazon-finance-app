@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import db from '../db/database.js';
 import { formatMoney } from '../utils/parsers.js';
+import { useAuth } from './AuthContext.jsx';
 
 const RateContext = createContext(null);
 const PAIR = 'USDCNY';
@@ -47,16 +48,6 @@ async function getCachedRate() {
   return { ...cached, stale: age > CACHE_TTL };
 }
 
-async function saveRate(rate, source, updatedAt, offline = false) {
-  await db.exchangeRate.put({
-    currencyPair: PAIR,
-    rate,
-    source,
-    updatedAt,
-    offline
-  });
-}
-
 export function RateProvider({ children }) {
   const [rate, setRate] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -66,6 +57,22 @@ export function RateProvider({ children }) {
   const [displayMode, setDisplayMode] = useState(() =>
     localStorage.getItem('amz_finance_currency_mode') || 'dual'
   ); // 'usd' | 'cny' | 'dual'
+  const { currentAccount } = useAuth();
+
+  // 写库权限：汇率是全局共享数据，仅普通用户及以上（Lv.2+）落库；
+  // 只读用户（Lv.1）仅内存展示，不写库、不触发云端待同步上传（避免只读用户产生写入）
+  const canWriteRate = useCallback(() => Number(currentAccount?.level || 0) >= 2, [currentAccount?.level]);
+
+  const saveRate = useCallback(async (rate, source, updatedAt, offline = false) => {
+    if (!canWriteRate()) return;
+    await db.exchangeRate.put({
+      currencyPair: PAIR,
+      rate,
+      source,
+      updatedAt,
+      offline
+    });
+  }, [canWriteRate]);
 
   const refreshRate = useCallback(async () => {
     setLoading(true);
@@ -80,7 +87,7 @@ export function RateProvider({ children }) {
     }
     setLoading(false);
     return !!result;
-  }, []);
+  }, [saveRate]);
 
   // 加载汇率 + 自动定时刷新
   useEffect(() => {

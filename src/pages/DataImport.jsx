@@ -277,8 +277,9 @@ export default function DataImport() {
   // 删除某次导入：按 batchId 删除该批导入的业务数据 + 删除导入日志
   // 说明：仅能删除带 importBatchId 的新导入（旧版存量日志无批次号，无法定位数据）
   const handleDeleteImport = async (log) => {
-    if (!can(PERM.DELETE_SINGLE_TX)) {
-      message.error(`需要 ${permLevelName(PERM.DELETE_SINGLE_TX)} 及以上权限才能删除`);
+    // 按批次删除整批数据 = 批量删除，级别须为 DELETE_BY_BATCH(3)，与设置页"按月份/类型删除"一致
+    if (!can(PERM.DELETE_BY_BATCH)) {
+      message.error(`需要 ${permLevelName(PERM.DELETE_BY_BATCH)} 及以上权限才能删除整批导入`);
       return;
     }
     try {
@@ -465,7 +466,7 @@ export default function DataImport() {
                     okButtonProps={{ danger: true }}
                     onConfirm={() => handleDeleteImport(log)}
                   >
-                    <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!can(PERM.DELETE_SINGLE_TX)}>
+                    <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!can(PERM.DELETE_BY_BATCH)}>
                       删除
                     </Button>
                   </Popconfirm>

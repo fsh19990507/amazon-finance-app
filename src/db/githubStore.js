@@ -289,9 +289,21 @@ export async function fetchCloudDb() {
 /**
  * 将整个 db 对象写回 GitHub（PUT Contents API，sha 乐观锁）
  * 409 冲突时自动重试：重新拉取最新 sha 后再 PUT（最多 2 次），避免并发写入互相冲突
+ * 注意：所有 PUT 经 enqueuePut 全局串行执行——页面手动同步、定时上传、启动补传
+ *       若并发 PUT，后写的会基于先写的 sha 重试并覆盖，最终状态一致但会产生无谓 409。
  * @returns {Promise<{ok:boolean, sha?:string, message?:string}>}
  */
-export async function pushCloudDb(dbObj) {
+export function pushCloudDb(dbObj) {
+  // 串行化：上一个 PUT 完成后再发起下一个（失败也继续队列，避免队列卡死）
+  const run = _putChain.then(() => doPushCloudDb(dbObj), () => doPushCloudDb(dbObj));
+  _putChain = run.catch(() => {});
+  return run;
+}
+
+// 全局上传串行链（所有 PUT 共用，防止并发写云端导致 409 与互相覆盖）
+let _putChain = Promise.resolve();
+
+async function doPushCloudDb(dbObj) {
   if (!hasGithubConfig()) return { ok: false, message: '未配置 GitHub 云端' };
   // 409 冲突时重试最多 2 次（重新拿 sha）
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -511,9 +523,15 @@ function mergeDirtyTables(cloudDb, dirtyTables, localSource) {
  * 全量上传：把当前本地 db 直接覆盖上传（用于一键迁移/首次同步）
  */
 export async function pushFullDb(dbObj) {
+  // 记录上传开始时的写入序列号：上传期间若有新写入（内存已有、云端未收），
+  // 不能用旧快照覆盖本地缓存，否则新数据刷新即丢（与 flushPending 的 raced 逻辑一致）
+  const startSeq = getDbWriteSeq();
   const res = await pushCloudDb(dbObj);
   if (res.ok) {
     writeLocalSha(res.sha);
+    if (getDbWriteSeq() !== startSeq) {
+      return { ok: true, raced: true, message: '上传期间有新数据写入，已保留待同步，稍后自动补传' };
+    }
     writeLocalCache(dbObj);
     clearDirty();
   }

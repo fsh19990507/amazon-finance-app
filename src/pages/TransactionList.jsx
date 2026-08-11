@@ -244,9 +244,16 @@ export default function TransactionList() {
     message.info(`已应用视图: ${view.name}`);
   };
 
-  const deleteView = async (viewId) => {
+  const deleteView = async (view) => {
+    // 权限：删除自己保存的视图需 SAVE_VIEW(2)；删除他人的视图需 MANAGE_ALL_VIEWS(3)
+    const isOwner = String(view.accountId || '') === String(currentAccount?.id || '');
+    const need = isOwner ? PERM.SAVE_VIEW : PERM.MANAGE_ALL_VIEWS;
+    if (!can(need)) {
+      message.error(`需要 ${permLevelName(need)} 及以上权限才能删除${isOwner ? '该视图' : '他人视图'}`);
+      return;
+    }
     try {
-      await db.savedViews.delete(viewId);
+      await db.savedViews.delete(view.id);
       message.success('视图已删除');
     } catch (e) {
       message.error('删除失败: ' + e.message);
@@ -362,6 +369,8 @@ export default function TransactionList() {
       items.push({ key: 'empty', label: <Text type="secondary">暂无保存的视图</Text>, disabled: true });
     } else {
       savedViews.forEach((v) => {
+        const isOwnerView = String(v.accountId || '') === String(currentAccount?.id || '');
+        const canDeleteView = can(isOwnerView ? PERM.SAVE_VIEW : PERM.MANAGE_ALL_VIEWS);
         items.push({
           key: String(v.id),
           label: (
@@ -373,8 +382,9 @@ export default function TransactionList() {
                 type="text"
                 size="small"
                 danger
+                disabled={!canDeleteView}
                 icon={<DeleteOutlined />}
-                onClick={(e) => { e.stopPropagation(); deleteView(v.id); }}
+                onClick={(e) => { e.stopPropagation(); deleteView(v); }}
               />
             </div>
           )
@@ -382,7 +392,7 @@ export default function TransactionList() {
       });
     }
     return items;
-  }, [savedViews]);
+  }, [savedViews, currentAccount?.id, can]);
 
   if (!allTransactions) return <Card><Empty description="加载中..." /></Card>;
 

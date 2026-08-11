@@ -18,7 +18,7 @@ import { AuthProvider, useAuth } from './context/AuthContext.jsx';
 import { ThemeProvider, useTheme } from './context/ThemeContext.jsx';
 import { StoreProvider, useStore } from './context/StoreContext.jsx';
 import { RateProvider, useRate } from './context/RateContext.jsx';
-import { permLevelName } from './utils/permissions.js';
+import { PERM, permLevelName } from './utils/permissions.js';
 import { subscribeCloudStatus } from './db/database.js';
 import { localCacheState } from './db/githubStore.js';
 
@@ -92,7 +92,7 @@ function StoreSelector({ isMobile }) {
         style={{ width: isMobile ? 120 : 170 }}
         options={options}
       />
-      {can(4) && (
+      {can(PERM.USE_STORE_COMPARE) && (
         <Tooltip title={compareMode ? '退出对比' : '店铺对比模式'}>
           <Button size="small" type={compareMode ? 'primary' : 'default'} onClick={() => setCompareMode(!compareMode)}>
             {isMobile ? (compareMode ? '退出' : '对比') : (compareMode ? '对比中' : '对比')}
@@ -258,6 +258,9 @@ function UserMenu({ isMobile }) {
 
 function AppLayout() {
   const navigate = useNavigate();
+  // 设置页路由守卫：设置页全部为管理功能，只读用户（Lv.1）无任何可操作项，
+  // 直接重定向首页，避免无权限用户进入管理界面
+  const { can } = useAuth();
   const location = useLocation();
   // 主题配置：布局配色全部取自当前主题（随主题联动）
   const { themeConfig } = useTheme();
@@ -446,7 +449,7 @@ function AppLayout() {
               <Route path="/transactions" element={<ErrorBoundary><TransactionList /></ErrorBoundary>} />
               <Route path="/expense" element={<ErrorBoundary><ExpenseAnalysis /></ErrorBoundary>} />
               <Route path="/product" element={<ErrorBoundary><ProductAnalysis /></ErrorBoundary>} />
-              <Route path="/settings" element={<ErrorBoundary><Settings /></ErrorBoundary>} />
+              <Route path="/settings" element={<ErrorBoundary>{can(PERM.IMPORT_DATA) ? <Settings /> : <Navigate to="/" replace />}</ErrorBoundary>} />
               <Route path="/settlement" element={<ErrorBoundary><SettlementAnalysis /></ErrorBoundary>} />
               <Route path="/business" element={<ErrorBoundary><BusinessAnalysis /></ErrorBoundary>} />
               <Route path="/advertising" element={<ErrorBoundary><AdvertisingAnalysis /></ErrorBoundary>} />
