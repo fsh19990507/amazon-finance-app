@@ -217,7 +217,7 @@ export async function checkGithubStatus() {
   const timer = setTimeout(() => controller.abort(), 4000);
   try {
     const url = `https://api.github.com/repos/${currentConfig.owner}/${currentConfig.repo}?ref=${currentConfig.branch}`;
-    const res = await fetch(url, { headers: ghHeaders(), signal: controller.signal });
+    const res = await fetch(url, { headers: ghHeaders(), signal: controller.signal, cache: 'no-store' });
     clearTimeout(timer);
     if (res.ok) {
       result.status = 'online';
@@ -270,7 +270,10 @@ export async function fetchCloudDb() {
   const timer = setTimeout(() => controller.abort(), 4000);
   try {
     const url = `https://api.github.com/repos/${currentConfig.owner}/${currentConfig.repo}/contents/${DB_PATH}?ref=${currentConfig.branch}`;
-    const res = await fetch(url, { headers: ghHeaders(), signal: controller.signal });
+    // cache: 'no-store' 必须禁用浏览器 HTTP 缓存：
+    // GitHub API 响应默认可被缓存（约 60s），若命中缓存会拿到「旧 sha」，
+    // 导致 PUT 乐观锁 409 冲突、且重试仍用旧 sha 永远失败（实测云同步中断的根因）
+    const res = await fetch(url, { headers: ghHeaders(), signal: controller.signal, cache: 'no-store' });
     clearTimeout(timer);
     if (!res.ok) return null;
     const meta = await res.json();
@@ -310,7 +313,8 @@ export async function pushCloudDb(dbObj) {
         method: 'PUT',
         headers: ghHeaders(),
         body: JSON.stringify(body),
-        signal: controller.signal
+        signal: controller.signal,
+        cache: 'no-store'
       });
       clearTimeout(timer);
       if (res.status === 409 && attempt < 2) {
