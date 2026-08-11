@@ -458,7 +458,7 @@ export default function Dashboard() {
       {/* 日历热力图 */}
       <Card title="每日销售热力图" size="small" style={{ marginBottom: 16 }}>
         {heatmapOption ? (
-          <div ref={heatmapChart.ref} style={{ width: '100%', height: 180 }} />
+          <div ref={heatmapChart.ref} style={{ width: '100%', height: 250 }} />
         ) : (
           <Empty
             description={activeMonthHasTxs ? '无数据' : `「${activeMonth || '当前'}」月份没有交易明细，热力图无法显示`}

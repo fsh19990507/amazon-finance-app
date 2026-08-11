@@ -343,9 +343,12 @@ export function buildCalendarHeatmapOption(data, { title = '', unit = '$' } = {}
     calculable: false, // pieces 分段模式下 calculable 不适用
     orient: 'horizontal',
     left: 'center',
-    bottom: 0,
+    // 底部独立空间：卡片底部留白，图例条不贴格子（此前紧贴最后一行格子，视觉上"压在颜色上"）
+    bottom: 6,
+    itemWidth: 18,
+    itemHeight: 11,
     text: ['高', '低'],
-    textStyle: { color: '#595959', fontSize: 12 },
+    textStyle: { color: '#8c8c8c', fontSize: 11 },
     pieces
   };
 
@@ -355,6 +358,18 @@ export function buildCalendarHeatmapOption(data, { title = '', unit = '$' } = {}
   // 这里：单月数据用单月字符串（整月展示最直观）；跨月兜底用日级数组。
   const singleMonth = minDate.slice(0, 7) === maxDate.slice(0, 7);
   const calendarRange = singleMonth ? minDate.slice(0, 7) : [minDate, maxDate];
+
+  // 每格显示日期数字：浅色格子用深色字、深色格子用白字，保证可读
+  const dateTextColorFor = (v) => {
+    const a = Math.abs(v);
+    for (let i = 0; i < bounds.length; i++) {
+      if (a <= bounds[i]) {
+        const c = LEVELS[Math.min(i, LEVELS.length - 1)].color;
+        return (c === '#cfe2f7' || c === '#9dbee8') ? 'rgba(30,58,95,0.85)' : '#ffffff';
+      }
+    }
+    return '#ffffff';
+  };
 
   return {
     title: title ? { text: title, left: 'center', textStyle: { fontSize: 14, fontWeight: 600 } } : undefined,
@@ -367,22 +382,33 @@ export function buildCalendarHeatmapOption(data, { title = '', unit = '$' } = {}
     },
     visualMap: visualMapConfig,
     calendar: {
-      top: 64,
-      left: 48,
-      right: 48,
-      cellSize: ['auto', 18],
+      // top 收紧顶部空白；bottom 为图例留出独立空间（防止图例紧贴/压住格子）
+      top: 32,
+      left: 40,
+      right: 14,
+      bottom: 42,
+      cellSize: ['auto', 17],
       range: calendarRange,
       itemStyle: { borderWidth: 2, borderColor: '#fff' },
-      dayLabel: { nameMap: ['日', '一', '二', '三', '四', '五', '六'], color: '#8c8c8c', fontSize: 11 },
-      // 月份标签加粗加深，月份边界一眼可辨
-      monthLabel: { nameMap: 'cn', color: '#434343', fontSize: 13, fontWeight: 600 },
-      yearLabel: { show: true, color: '#595959', fontWeight: 600 },
+      // 星期标签字号调小
+      dayLabel: { nameMap: ['日', '一', '二', '三', '四', '五', '六'], color: '#8c8c8c', fontSize: 10 },
+      monthLabel: { nameMap: 'cn', color: '#595959', fontSize: 12, fontWeight: 600 },
+      yearLabel: { show: true, color: '#8c8c8c', fontWeight: 600 },
       splitLine: { lineStyle: { color: '#d9d9d9', width: 1 } }
     },
     series: {
       type: 'heatmap',
       coordinateSystem: 'calendar',
-      data: data.map((d) => [d.date, d.value])
+      data: data.map((d) => ({
+        value: [d.date, d.value],
+        // 格子内显示日期数字（小字），一眼可辨每日销售额分布
+        label: {
+          show: true,
+          fontSize: 10,
+          color: dateTextColorFor(d.value),
+          formatter: (p) => String(Number(String(p.data[0]).slice(-2)))
+        }
+      }))
     }
   };
 }
