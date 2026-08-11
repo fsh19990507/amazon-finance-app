@@ -1,36 +1,8 @@
 // ECharts React hook —— 强制 canvas 渲染，支持工具栏、自适应轴、全屏
-// 按需引入（echarts/core tree-shaking）：只打包实际用到的图表，包体减小 60%+，加快页面加载
+// 使用全量 echarts 引入（此前 echarts/core 按需引入对日历热力图渲染存在兼容性问题，
+// 全量引入最稳妥；包体略大但功能完整）
 import { useEffect, useRef, useState, useCallback } from 'react';
-import * as echarts from 'echarts/core';
-import {
-  LineChart,
-  BarChart,
-  PieChart,
-  RadarChart,
-  HeatmapChart
-} from 'echarts/charts';
-import {
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  TitleComponent,
-  VisualMapComponent,
-  DataZoomComponent,
-  MarkLineComponent,
-  MarkPointComponent,
-  ToolboxComponent,
-  CalendarComponent
-} from 'echarts/components';
-import { CanvasRenderer } from 'echarts/renderers';
-
-// 注册全部用到的图表与组件（只注册一次）
-echarts.use([
-  LineChart, BarChart, PieChart, RadarChart, HeatmapChart,
-  GridComponent, TooltipComponent, LegendComponent, TitleComponent,
-  VisualMapComponent, DataZoomComponent, MarkLineComponent, MarkPointComponent,
-  ToolboxComponent, CalendarComponent,
-  CanvasRenderer
-]);
+import * as echarts from 'echarts';
 
 /**
  * @param {object|null} option ECharts 配置
@@ -359,7 +331,7 @@ export function buildCalendarHeatmapOption(data, { title = '', unit = '$' } = {}
   const singleMonth = minDate.slice(0, 7) === maxDate.slice(0, 7);
   const calendarRange = singleMonth ? minDate.slice(0, 7) : [minDate, maxDate];
 
-  // 每格显示日期数字：浅色格子用深色字、深色格子用白字，保证可读
+  // 每格显示日期数字：浅色格子用深字、深色格子用白字，保证可读
   const dateTextColorFor = (v) => {
     const a = Math.abs(v);
     for (let i = 0; i < bounds.length; i++) {
@@ -382,6 +354,10 @@ export function buildCalendarHeatmapOption(data, { title = '', unit = '$' } = {}
     },
     visualMap: visualMapConfig,
     calendar: {
+      // 竖向月历布局（orient: 'vertical'）：7 列 × 周数行，与传统日历一致。
+      // 注意：ECharts 默认 orient 为 'horizontal'（横向：每周一列、7 行星期），
+      // 会渲染成"横排 7 行、颜色成对"的怪异布局，用户无法接受。
+      orient: 'vertical',
       // top 收紧顶部空白；bottom 为图例留出独立空间（防止图例紧贴/压住格子）
       top: 32,
       left: 40,
@@ -399,17 +375,15 @@ export function buildCalendarHeatmapOption(data, { title = '', unit = '$' } = {}
     series: {
       type: 'heatmap',
       coordinateSystem: 'calendar',
-      data: data.map((d) => ({
-        value: [d.date, d.value],
-        // 格子内显示日期数字（小字），一眼可辨每日销售额分布
-        label: {
-          show: true,
-          fontSize: 10,
-          color: dateTextColorFor(d.value),
-          formatter: (p) => String(Number(String(p.data[0]).slice(-2)))
-        }
-      }))
-    }
+      // 注意：这里不配置 label（show 默认 false）。
+      // ECharts 5.4/5.6 对"日历热力图 + label 函数（formatter/color 回调）"组合存在渲染 bug
+      // （每天两格、格子错位），任何 label 函数都会触发。日期数字改由 Dashboard 用 graphic
+      // 组件按 calendar 坐标手动绘制（见 _meta 字段）。
+      data: data.map((d) => [d.date, d.value])
+    },
+    // 内部元数据：供外部（Dashboard）用 graphic 绘制格子内日期文字
+    // data: 原始 [{date, value}]；bounds/levels: 分段阈值与色阶
+    _meta: { data, bounds, levels: LEVELS }
   };
 }
 

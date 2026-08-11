@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Card, Row, Col, Statistic, Empty, Alert, Spin, Typography,
   Space, Tag, Select, DatePicker, Button, Tooltip, Badge, Modal, Segmented
@@ -27,6 +27,8 @@ import {
   matchesStoreId
 } from '../utils/dataAggregator.js';
 import { useECharts, buildWaterfallOption, buildCalendarHeatmapOption, chartColorsFor } from '../utils/useECharts.js';
+// 日历热力图独立渲染用（避免 useECharts 对 calendar 图表的渲染异常，详见下方说明）
+import * as echarts from 'echarts';
 import { useStore } from '../context/StoreContext.jsx';
 import { useRate } from '../context/RateContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -34,6 +36,21 @@ import { useTheme } from '../context/ThemeContext.jsx';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
+
+// 深拷贝 ECharts option（保留函数引用，如 label.color 回调、tooltip formatter），
+// 避免 setOption 就地修改 useMemo 缓存的 option 对象
+function cloneEChartsOption(opt) {
+  return {
+    ...opt,
+    title: opt.title ? { ...opt.title } : undefined,
+    tooltip: opt.tooltip ? { ...opt.tooltip } : undefined,
+    visualMap: opt.visualMap
+      ? { ...opt.visualMap, pieces: (opt.visualMap.pieces || []).map((p) => ({ ...p })) }
+      : undefined,
+    calendar: opt.calendar ? { ...opt.calendar } : undefined,
+    series: Array.isArray(opt.series) ? opt.series.map((s) => ({ ...s })) : { ...opt.series }
+  };
+}
 
 export default function Dashboard() {
   const { currentStoreId, compareMode, compareStoreIds } = useStore();
@@ -254,7 +271,69 @@ export default function Dashboard() {
     const data = buildDailyHeatmapData(allTxs.filter((t) => t.month === activeMonth));
     return buildCalendarHeatmapOption(data, { title: '每日销售热力图', unit: '$' });
   }, [allTxs, activeMonth]);
-  const heatmapChart = useECharts(heatmapOption, [heatmapOption], { toolbar: false, autoScale: false });
+  // 日历热力图：独立渲染（不经过 useECharts）
+  // 原因：useECharts 的 applyOption/setOption 流程对该日历热力图（calendar+visualMap pieces）
+  // 存在渲染异常（格子错位、每天两格、列宽错误），独立实例 + 深拷贝配置可稳定正常渲染。
+  const heatmapRef = useRef(null);
+  useEffect(() => {
+    const el = heatmapRef.current;
+    if (!el || !heatmapOption) return;
+    const chart = echarts.init(el);
+    // 深拷贝配置（保留函数引用），避免 setOption 就地修改 useMemo 缓存的 option
+    chart.setOption(cloneEChartsOption(heatmapOption), true);
+
+    // 用 graphic 组件绘制格子内日期数字（浅色格深字/深色格白字）。
+    // 不能使用 ECharts 原生 label 函数（formatter/color 回调）——会触发日历热力图渲染 bug。
+    const drawDateTexts = () => {
+      try {
+        const series = chart.getModel().getSeriesByIndex(0);
+        const cal = series && series.coordinateSystem;
+        const meta = heatmapOption._meta;
+        if (!cal || !meta || !meta.data || !meta.data.length) return;
+        const els = meta.data.map((d) => {
+          const pt = cal.dataToPoint(d.date);
+          if (!pt || !isFinite(pt[0]) || !isFinite(pt[1])) return null;
+          const a = Math.abs(d.value);
+          let isLight = false;
+          for (let i = 0; i < meta.bounds.length; i++) {
+            if (a <= meta.bounds[i]) {
+              const c = meta.levels[Math.min(i, meta.levels.length - 1)].color;
+              isLight = (c === '#cfe2f7' || c === '#9dbee8');
+              break;
+            }
+          }
+          return {
+            type: 'text',
+            left: pt[0],
+            top: pt[1],
+            style: {
+              text: String(Number(String(d.date).slice(-2))),
+              fill: isLight ? 'rgba(30,58,95,0.85)' : '#ffffff',
+              fontSize: 10,
+              align: 'center',
+              verticalAlign: 'middle'
+            }
+          };
+        }).filter(Boolean);
+        chart.setOption({ graphic: els });
+      } catch (e) {
+        // 日期文字绘制失败不影响热力图本身
+        console.warn('热力图日期文字绘制失败:', e);
+      }
+    };
+    chart.on('finished', drawDateTexts);
+    drawDateTexts();
+
+    const handleResize = () => {
+      chart.resize();
+      setTimeout(drawDateTexts, 60);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      chart.dispose();
+    };
+  }, [heatmapOption]);
   // 当前月份是否有交易明细（热力图数据源；有利润报表但无交易明细时给出明确提示）
   const activeMonthHasTxs = useMemo(
     () => Boolean(activeMonth && allTxs.some((t) => t.month === activeMonth && t.type === '订单付款')),
@@ -458,7 +537,7 @@ export default function Dashboard() {
       {/* 日历热力图 */}
       <Card title="每日销售热力图" size="small" style={{ marginBottom: 16 }}>
         {heatmapOption ? (
-          <div ref={heatmapChart.ref} style={{ width: '100%', height: 250 }} />
+          <div ref={heatmapRef} style={{ width: '100%', height: 250 }} />
         ) : (
           <Empty
             description={activeMonthHasTxs ? '无数据' : `「${activeMonth || '当前'}」月份没有交易明细，热力图无法显示`}
