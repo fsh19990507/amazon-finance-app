@@ -48,9 +48,11 @@ async function translateOne(text) {
  * @param {string[]} names 商品名称列表
  * @param {object} opts
  * @param {boolean} opts.skipNetwork 是否跳过联网（仅读缓存）
+ * @param {boolean} opts.persist 是否写入本地缓存（默认 true；只读用户传 false，只展示不落库、不触发云端上传）
  * @returns {Map<string, string>} key 为原始名称，value 为中文翻译（无翻译则为空字符串）
  */
 export async function translateProductNames(names, opts = {}) {
+  const { skipNetwork = false, persist = true } = opts;
   const result = new Map();
   const toFetch = [];
 
@@ -79,10 +81,13 @@ export async function translateProductNames(names, opts = {}) {
       const key = normalizeKey(name);
       if (translated) {
         result.set(name, translated);
-        try {
-          await db.translations?.put({ original: key, text: translated, updatedAt: Date.now() });
-        } catch {
-          // ignore cache write error
+        // persist=false（只读用户）：仅内存展示，不写库、不触发云端上传
+        if (persist) {
+          try {
+            await db.translations?.put({ original: key, text: translated, updatedAt: Date.now() });
+          } catch {
+            // ignore cache write error
+          }
         }
       } else {
         result.set(name, '');

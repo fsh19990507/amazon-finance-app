@@ -94,6 +94,10 @@ export default function DataImport() {
 
   // 导入单个文件，返回该文件的处理结果（供批量队列汇总）
   const importOneFile = async (file) => {
+    // 函数内二次校验（按钮 disabled / 入口拦截之外的最后防线，防 devtools 绕过）
+    if (!can(PERM.IMPORT_DATA)) {
+      return { fileName: file?.name || '', error: `需要 ${permLevelName(PERM.IMPORT_DATA)} 及以上权限才能导入数据` };
+    }
     try {
       const result = await parseExcelFile(file);
       const { fileType, rows, sheetName } = result;

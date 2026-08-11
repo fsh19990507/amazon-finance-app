@@ -162,7 +162,8 @@ export default function ProductAnalysis() {
     (async () => {
       setTranslating(true);
       try {
-        const map = await translateProductNames(names);
+        // 只读用户（Lv.1）：翻译仅内存展示，不写库、不触发云端上传
+        const map = await translateProductNames(names, { persist: can(PERM.SAVE_VIEW) });
         if (!cancelled) setTranslations(map);
       } catch (e) {
         console.error('商品翻译失败:', e);
@@ -171,7 +172,7 @@ export default function ProductAnalysis() {
       }
     })();
     return () => { cancelled = true; };
-  }, [productRows]);
+  }, [productRows, can]);
 
   const totals = useMemo(() => {
     return productRows.reduce(
