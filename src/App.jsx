@@ -56,7 +56,7 @@ const menuItems = [
   { key: '/help', icon: <QuestionCircleOutlined />, label: '帮助中心' }
 ];
 
-function StoreSelector() {
+function StoreSelector({ isMobile }) {
   const { stores, currentStoreId, switchStore, compareMode, setCompareMode, compareStoreIds, setCompareStoreIds } = useStore();
   const { can } = useAuth();
 
@@ -74,9 +74,9 @@ function StoreSelector() {
         mode="multiple"
         value={compareStoreIds}
         onChange={setCompareStoreIds}
-        style={{ width: 260 }}
+        style={{ width: isMobile ? 150 : 260 }}
         placeholder="选择对比店铺（2-3个）"
-        maxTagCount={3}
+        maxTagCount={2}
         options={options.filter((o) => o.value !== 'all')}
         size="small"
       />
@@ -88,13 +88,14 @@ function StoreSelector() {
       <Select
         value={currentStoreId}
         onChange={switchStore}
-        style={{ width: 170 }}
+        // 手机端压缩宽度，防止与右侧按钮重叠溢出
+        style={{ width: isMobile ? 120 : 170 }}
         options={options}
       />
       {can(4) && (
         <Tooltip title={compareMode ? '退出对比' : '店铺对比模式'}>
           <Button size="small" type={compareMode ? 'primary' : 'default'} onClick={() => setCompareMode(!compareMode)}>
-            {compareMode ? '对比中' : '对比'}
+            {isMobile ? (compareMode ? '退出' : '对比') : (compareMode ? '对比中' : '对比')}
           </Button>
         </Tooltip>
       )}
@@ -224,7 +225,7 @@ function GlobalSearch() {
   );
 }
 
-function UserMenu() {
+function UserMenu({ isMobile }) {
   const { currentAccount, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -241,12 +242,15 @@ function UserMenu() {
     <Dropdown menu={{ items }} placement="bottomRight">
       <Space style={{ cursor: 'pointer' }}>
         <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: '#1e3a5f' }} />
-        <span style={{ fontSize: 13 }}>
-          {nickname}
-          <span style={{ color: '#8c8c8c', marginLeft: 4, fontSize: 11 }}>
-            Lv.{level} {permLevelName(level)}
+        {/* 手机端空间有限，只显示头像，昵称放菜单里 */}
+        {!isMobile && (
+          <span style={{ fontSize: 13 }}>
+            {nickname}
+            <span style={{ color: '#8c8c8c', marginLeft: 4, fontSize: 11 }}>
+              Lv.{level} {permLevelName(level)}
+            </span>
           </span>
-        </span>
+        )}
       </Space>
     </Dropdown>
   );
@@ -379,13 +383,13 @@ function AppLayout() {
                 style={{ color: textColor }}
               />
             )}
-            <StoreSelector />
+            <StoreSelector isMobile={isMobile} />
           </Space>
-          <Space size={8} style={{ flexShrink: 0 }}>
+          <Space size={isMobile ? 4 : 8} style={{ flexShrink: 0 }}>
             {!isMobile && <GlobalSearch />}
             <RateDisplay />
             <ThemeToggle />
-            <UserMenu />
+            <UserMenu isMobile={isMobile} />
           </Space>
         </Header>
 

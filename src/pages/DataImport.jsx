@@ -4,7 +4,7 @@
 import React, { useState, useRef } from 'react';
 import {
   Upload, Button, Card, Table, Tag, message, Modal, Statistic,
-  Row, Col, Typography, Alert, Divider
+  Row, Col, Typography, Alert, Divider, Popconfirm
 } from 'antd';
 import {
   InboxOutlined, FileExcelOutlined, CheckCircleOutlined,
@@ -12,10 +12,11 @@ import {
 } from '@ant-design/icons';
 import { useLiveQuery } from '../hooks/useLiveQuery.js';
 import db, { checkCloudStatus } from '../db/database.js';
+import { pushFullDb, createEmptyDb } from '../db/githubStore.js';
 import { parseExcelFile, FILE_TYPE } from '../utils/excelImporter.js';
 import { useStore } from '../context/StoreContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
-import { PERM } from '../utils/permissions.js';
+import { PERM, permLevelName } from '../utils/permissions.js';
 
 const { Dragger } = Upload;
 const { Text, Title } = Typography;
@@ -103,6 +104,10 @@ export default function DataImport() {
         return { fileName: file.name, error: `无法识别的文件类型：${fileType}。请到「帮助中心 → 报表字典」查看 6 类报表的正确格式` };
       }
 
+      // 生成导入批次 ID：本次导入的所有行共享同一 batchId，
+      // 供「导入历史」按批次删除该次导入的全部数据
+      const batchId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
       let successCount = 0;
       let duplicateCount = 0;
       const errorCount = 0;
@@ -126,7 +131,11 @@ export default function DataImport() {
       const newRows = [];
       for (const row of rows) {
         if (existingKeys.has(row.dedupKey)) duplicateCount++;
-        else newRows.push(row);
+        else {
+          // 记录导入批次（供按批次删除）
+          row.importBatchId = batchId;
+          newRows.push(row);
+        }
       }
       // 入库（店铺归属已在上面补写完成）
       if (newRows.length) {
@@ -144,7 +153,8 @@ export default function DataImport() {
           successCount,
           duplicateCount,
           errorCount,
-          totalParsed: rows.length
+          totalParsed: rows.length,
+          importBatchId: batchId
         });
       } catch (logErr) {
         if (isMissingTableError(logErr)) {
@@ -243,20 +253,54 @@ export default function DataImport() {
     }
     Modal.confirm({
       title: '确认清空所有数据？',
-      content: '将删除全部 6 类报表（交易明细/利润报表/英文结算/业务报告/广告报告/库存报告）数据，操作不可恢复。',
+      content: '将删除全部 6 类报表（交易明细/利润报表/英文结算/业务报告/广告报告/库存报告）数据，操作不可恢复，云端与本机会一并清空。',
       okText: '清空',
       okType: 'danger',
       cancelText: '取消',
       onOk: async () => {
         await db.cleanAll();
+        // 同步清空云端：全量推送空库并清除待同步标记，避免"本地空表待上传"覆盖云端数据
+        try {
+          await pushFullDb(createEmptyDb());
+        } catch (e) {
+          message.warning('本地已清空，但云端清空失败，请到「设置 → 云端同步」手动「推送到云端」');
+        }
         setReport(null);
-        message.success('已清空所有数据');
+        message.success('已清空所有数据（云端与本机）');
       }
     });
   };
 
   // fileType → 中文名（导入报告、导入历史共用）
   const typeText = (t) => FILE_TYPE_CONFIG[t]?.name || '未知';
+
+  // 删除某次导入：按 batchId 删除该批导入的业务数据 + 删除导入日志
+  // 说明：仅能删除带 importBatchId 的新导入（旧版存量日志无批次号，无法定位数据）
+  const handleDeleteImport = async (log) => {
+    if (!can(PERM.DELETE_SINGLE_TX)) {
+      message.error(`需要 ${permLevelName(PERM.DELETE_SINGLE_TX)} 及以上权限才能删除`);
+      return;
+    }
+    try {
+      const { importBatchId, fileType } = log;
+      if (importBatchId) {
+        // 找到该类型对应的表，删除本批次数据
+        const cfg = FILE_TYPE_CONFIG[fileType];
+        if (cfg && cfg.table) {
+          const all = await cfg.table.toArray();
+          const kept = all.filter((r) => String(r.importBatchId || '') !== String(importBatchId));
+          if (kept.length !== all.length) {
+            await cfg.table.bulkPut(kept);
+          }
+        }
+      }
+      // 删除导入日志
+      await db.importLogs.delete(log.id);
+      message.success('已删除该次导入' + (importBatchId ? '及其数据' : '（存量记录无批次，仅删除日志）'));
+    } catch (e) {
+      message.error('删除失败: ' + e.message);
+    }
+  };
 
   // 顶部 6 类报表统计卡片
   const statCards = [
@@ -407,7 +451,26 @@ export default function DataImport() {
               },
               { title: '解析', dataIndex: 'totalParsed', width: 70, align: 'right' },
               { title: '成功', dataIndex: 'successCount', width: 70, align: 'right' },
-              { title: '重复', dataIndex: 'duplicateCount', width: 70, align: 'right' }
+              { title: '重复', dataIndex: 'duplicateCount', width: 70, align: 'right' },
+              {
+                title: '操作', width: 110, fixed: 'right',
+                render: (_, log) => (
+                  <Popconfirm
+                    title={log.importBatchId ? '删除该次导入及对应数据？' : '删除该次导入记录？'}
+                    description={log.importBatchId
+                      ? `将删除 ${typeText(log.fileType)} ${log.successCount} 条数据并移除记录，操作不可恢复。`
+                      : '存量记录无批次号，仅删除导入日志，不影响已导入数据。'}
+                    okText="删除"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => handleDeleteImport(log)}
+                  >
+                    <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!can(PERM.DELETE_SINGLE_TX)}>
+                      删除
+                    </Button>
+                  </Popconfirm>
+                )
+              }
             ]}
           />
         ) : (

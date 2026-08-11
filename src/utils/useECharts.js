@@ -349,6 +349,13 @@ export function buildCalendarHeatmapOption(data, { title = '', unit = '$' } = {}
     pieces
   };
 
+  // 日历范围：ECharts 5.5 的 calendar.range 传"月份字符串数组"（如 ['2026-06','2026-06']）
+  // 会触发布局 bug——只渲染第一天，其余格子全部丢失（用户反馈"热力图颜色不对"的根因）。
+  // 已验证：单月字符串 '2026-06' 或日级数组 ['2026-06-01','2026-06-28'] 均正常。
+  // 这里：单月数据用单月字符串（整月展示最直观）；跨月兜底用日级数组。
+  const singleMonth = minDate.slice(0, 7) === maxDate.slice(0, 7);
+  const calendarRange = singleMonth ? minDate.slice(0, 7) : [minDate, maxDate];
+
   return {
     title: title ? { text: title, left: 'center', textStyle: { fontSize: 14, fontWeight: 600 } } : undefined,
     tooltip: {
@@ -364,7 +371,7 @@ export function buildCalendarHeatmapOption(data, { title = '', unit = '$' } = {}
       left: 48,
       right: 48,
       cellSize: ['auto', 18],
-      range: [minDate.slice(0, 7), maxDate.slice(0, 7)],
+      range: calendarRange,
       itemStyle: { borderWidth: 2, borderColor: '#fff' },
       dayLabel: { nameMap: ['日', '一', '二', '三', '四', '五', '六'], color: '#8c8c8c', fontSize: 11 },
       // 月份标签加粗加深，月份边界一眼可辨

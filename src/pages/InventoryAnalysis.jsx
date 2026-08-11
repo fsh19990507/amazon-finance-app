@@ -9,17 +9,19 @@
 //           formatMoney（金额格式化）
 import React, { useMemo } from 'react';
 import {
-  Card, Row, Col, Statistic, Empty, Spin, Typography, Table, Tag
+  Card, Row, Col, Statistic, Empty, Spin, Typography, Table, Tag, Button, Popconfirm, message
 } from 'antd';
 import {
   DatabaseOutlined, ClockCircleOutlined, RocketOutlined,
-  WarningOutlined, PayCircleOutlined
+  WarningOutlined, PayCircleOutlined, DeleteOutlined
 } from '@ant-design/icons';
 import { useLiveQuery } from '../hooks/useLiveQuery.js';
 import db from '../db/database.js';
 import { useECharts, chartColorsFor } from '../utils/useECharts.js';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { useStore } from '../context/StoreContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
+import { PERM, permLevelName } from '../utils/permissions.js';
 import { matchesStoreId } from '../utils/dataAggregator.js';
 import { formatMoney } from '../utils/parsers.js';
 
@@ -29,6 +31,21 @@ export default function InventoryAnalysis() {
   const { themeId } = useTheme();
   const colors = chartColorsFor(themeId);
   const { currentStoreId } = useStore();
+  const { can } = useAuth();
+
+  // 删除单条库存记录（需普通用户及以上权限）
+  const handleDelete = async (record) => {
+    if (!can(PERM.DELETE_SINGLE_TX)) {
+      message.error(`需要 ${permLevelName(PERM.DELETE_SINGLE_TX)} 及以上权限才能删除`);
+      return;
+    }
+    try {
+      await db.inventoryRecords.delete(record.id);
+      message.success('删除成功');
+    } catch (e) {
+      message.error('删除失败: ' + e.message);
+    }
+  };
 
   // 加载库存报告数据（按当前选中店铺过滤；「全部店铺」时不限制）
   const data = useLiveQuery(
@@ -197,7 +214,21 @@ export default function InventoryAnalysis() {
     { title: '可售', dataIndex: 'available', width: 90, align: 'right', render: (v) => v || 0 },
     { title: '预留', dataIndex: 'reserved', width: 90, align: 'right', render: (v) => v || 0 },
     { title: '在途', dataIndex: 'inbound', width: 90, align: 'right', render: (v) => v || 0 },
-    { title: '总量', dataIndex: 'totalQty', width: 90, align: 'right', render: (v) => <strong>{v || 0}</strong> }
+    { title: '总量', dataIndex: 'totalQty', width: 90, align: 'right', render: (v) => <strong>{v || 0}</strong> },
+    {
+      title: '操作', width: 80, fixed: 'right',
+      render: (_, r) => (
+        <Popconfirm
+          title="确认删除这条库存记录？"
+          okText="删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+          onConfirm={() => handleDelete(r)}
+        >
+          <Button type="link" size="small" danger icon={<DeleteOutlined />} disabled={!can(PERM.DELETE_SINGLE_TX)}>删除</Button>
+        </Popconfirm>
+      )
+    }
   ];
 
   return (

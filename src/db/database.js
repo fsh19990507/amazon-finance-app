@@ -7,7 +7,7 @@
 // 对外接口与旧版完全兼容：db.表名.toArray/count/add/put/bulkAdd/update/delete/clear/get
 //   + where(f).equals(v)/first + orderBy(f).reverse().limit(n) 链式查询
 import { githubFallback, getGithubConfig, hasGithubConfig, checkGithubStatus,
-  subscribeGithubStatus, readCachedDb, cacheDb, refreshFromCloud,
+  subscribeGithubStatus, readCachedDb, cacheDb, refreshFromCloud, forcePullFromCloud,
   markTableDirty, flushPending, pushFullDb, createEmptyDb, bumpDbWriteSeq } from './githubStore.js';
 
 // ============== 导出兼容（旧版 checkCloudStatus 语义保留） ==============
@@ -216,10 +216,13 @@ export function startCloudSync() {
 
 /**
  * 手动从云端拉取并应用到内存 + UI（与 startCloudSync 的静默拉取不同，本次立即生效）
+ * 注意：使用「强制拉取」——云端数据直接覆盖本地并清除待同步标记。
+ * 原因：若本地有误操作清空产生的空脏表，普通合并会以空表覆盖云端数据且拉不回来；
+ *       手动拉取语义应为「以云端为准」，故走 forcePullFromCloud。
  * @returns {Promise<{changed:boolean, db:Object|null}>}
  */
 export async function pullFromCloud() {
-  const res = await refreshFromCloud();
+  const res = await forcePullFromCloud();
   if (res.changed && res.db) {
     memoryDb = res.db;
     notifyDbChanged();

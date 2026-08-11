@@ -402,7 +402,32 @@ export async function refreshFromCloud() {
 }
 
 /**
+ * 强制从云端拉取（手动「从云端拉取」用）：云端数据直接覆盖本地缓存并清除待同步标记。
+ * 与 refreshFromCloud 的区别：不合并本地脏表（本地空表/误操作清空不会覆盖云端数据），
+ * 避免用户点「清空所有数据」后本地脏表把云端数据也清掉、且再也拉不回来。
+ * @returns {Promise<{changed:boolean, db:Object|null}>}
+ */
+export async function forcePullFromCloud() {
+  if (!hasGithubConfig()) return { changed: false, db: readLocalCache() };
+  const cloud = await fetchCloudDb();
+  if (!cloud) {
+    githubFallback.active = true;
+    return { changed: false, db: readLocalCache() };
+  }
+  if (cloud.sha === readLocalSha()) {
+    return { changed: false, db: readLocalCache() };
+  }
+  // 直接以云端为准，不合并本地脏表
+  writeLocalCache(cloud.db);
+  writeLocalSha(cloud.sha);
+  clearDirty();
+  githubFallback.active = false;
+  return { changed: true, db: cloud.db };
+}
+
+/**
  * 合并本地脏表到云端数据（本地改动优先覆盖对应表，其余保留云端）
+ * 保护规则：本地脏表为空数组 且 云端该表非空时，保留云端（防止误操作清空/异常空表覆盖云端数据）
  */
 function mergeLocalDirty(cloudDb) {
   const dirty = readDirty();
@@ -413,6 +438,11 @@ function mergeLocalDirty(cloudDb) {
       const local = JSON.parse(localStorage.getItem(CACHE_KEY));
       const rows = local?.tables?.[tableName];
       if (Array.isArray(rows)) {
+        // 本地空表 + 云端有数据：视为异常/误清空，保留云端（不覆盖）
+        const cloudRows = cloudDb.tables?.[tableName];
+        if (rows.length === 0 && Array.isArray(cloudRows) && cloudRows.length > 0) {
+          continue;
+        }
         result.tables[tableName] = rows;
       }
     } catch (e) { /* ignore */ }
@@ -455,12 +485,18 @@ export async function flushPending(localDb = null) {
 
 /**
  * 把指定脏表用本地数据覆盖到云端 db 上
+ * 保护规则：本地脏表为空数组 且 云端该表非空时，保留云端（防止误操作清空/异常空表覆盖云端数据）
  */
 function mergeDirtyTables(cloudDb, dirtyTables, localSource) {
   const result = { ...cloudDb, tables: { ...cloudDb.tables } };
   for (const tableName of dirtyTables) {
     const rows = localSource?.tables?.[tableName];
     if (Array.isArray(rows)) {
+      // 本地空表 + 云端有数据：视为异常/误清空，保留云端（不覆盖）
+      const cloudRows = cloudDb.tables?.[tableName];
+      if (rows.length === 0 && Array.isArray(cloudRows) && cloudRows.length > 0) {
+        continue;
+      }
       result.tables[tableName] = rows;
     }
   }

@@ -158,11 +158,12 @@ export function extractTransactionRows(matrix) {
       promoAmount: parseMoney(row[colIndex['促销返点总额']]),
       amazonFee: parseMoney(row[colIndex['亚马逊所收费用']]),
       other: parseMoney(row[colIndex['其他']]),
-      total: parseMoney(row[colIndex['总计 (USD)']]),
-      // 去重键
-      dedupKey: ''
+      total: parseMoney(row[colIndex['总计 (USD)']])
     };
-    obj.dedupKey = `${obj.orderId}|${obj.type}|${obj.date}`;
+    // 去重键：orderId|type|date|productName
+    // 说明：同一订单号同一天可能存在多条不同费用（如优惠券参与费/优惠券绩效费），
+    //       必须带上商品名/费用名，否则会被误判为重复而丢数据。
+    obj.dedupKey = `${obj.orderId}|${obj.type}|${obj.date}|${obj.productName || ''}`;
     rows.push(obj);
   }
   return rows;
